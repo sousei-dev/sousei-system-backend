@@ -13,12 +13,15 @@ passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 
 # HTTP 클라이언트
-httpx==0.25.2
+httpx==0.23.3
 requests==2.31.0
 
 # PDF 생성
 weasyprint==60.2
 jinja2==3.1.2
+
+# 이미지 처리
+Pillow==10.2.0
 
 # 환경 변수 관리
 python-dotenv==1.0.0
@@ -43,3 +46,5 @@ flake8==6.1.0
 
 # 운영 환경 추가 패키지
 gunicorn==21.2.0
+supabase
+reportlab
