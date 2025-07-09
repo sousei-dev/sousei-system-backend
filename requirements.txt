@@ -20,9 +20,6 @@ requests==2.31.0
 weasyprint==60.2
 jinja2==3.1.2
 
-# 이미지 처리
-Pillow==10.1.0
-
 # 환경 변수 관리
 python-dotenv==1.0.0
 
