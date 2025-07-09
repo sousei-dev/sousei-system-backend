@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>請求書</title>
+  <style>
+    @font-face {
+      font-family: "Noto Sans JP";
+      src: url("static/fonts/NotoSansJP-Regular.ttf") format("opentype");
+      font-weight: normal;
+      font-style: normal;
+    }
+    body {
+      font-family: "Noto Sans JP", sans-serif;
+      font-size: 10pt;
+    }
+    .header, .footer {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .right-text {
+      text-align: right;
+    }
+    .line-height {
+      line-height: 1.2;
+    }
+    .title {
+      text-align: center;
+      font-weight: bold;
+      font-size: 18pt;
+      margin: 30px 0;
+    }
+    .notice {
+      margin-bottom: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 10px;
+    }
+    th, td {
+      border: 1px solid black;
+      padding: 6px;
+      text-align: center;
+    }
+    .right {
+      text-align: right;
+    }
+    .left {
+      text-align: left;
+    }
+    .bold {
+      font-weight: bold;
+    }
+    .note {
+      font-size: 10pt;
+      margin-top: 20px;
+      border: 1px solid black;
+      padding: 5px;
+      min-height: 200px;
+    }
+    .box {
+      border: 1px solid black;
+      padding: 5px;
+      margin-top: 10px;
+    }
+    .not-under-border-line {
+      border-bottom: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header line-height">
+  <div>
+    〒546-0003<br>
+    大阪市東住吉区今川4-5-9-201
+  </div>
+  <div class="right-text line-height">
+    大阪医療介護協同組合<br>
+    〒546-0003 大阪市東住吉区今川4-5-9-201<br>
+    TEL 06-6654-8836　FAX 06-6654-8876<br>
+    登録番号 T6120005018169
+  </div>
+</div>
+  <div style="display: inline-block; border-bottom: 2px solid #000; padding-bottom: 4px;">
+  　　　株式会社 ミシマ　御中　　　　　　　　　
+</div>
+<div class="title">請 求 書</div>
+<div class="right-text">2025年2月20日</div>
+
+<div class="notice">
+  いつもお世話になっております。<br>
+  以下ご請求させていただきますのでよろしくお願い申し上げます。
+</div>
+
+<table>
+  <tr>
+    <th>請求の項目</th>
+    <th>単価</th>
+    <th>数量</th>
+    <th>税率</th>
+    <th>消費税額</th>
+    <th>税抜金額</th>
+  </tr>
+  <tr>
+    <td style="border-bottom: none; border-top: none; text-align: left">1 組合管理費3月分（3年目：11ヶ月）</td>
+    <td style="border-bottom: none; border-top: none;" class="right">20,000</td>
+    <td style="border-bottom: none; border-top: none" class="right">3</td>
+    <td style="border-bottom: none; border-top: none">10%</td>
+    <td style="border-bottom: none; border-top: none" class="right">6,000</td>
+    <td style="border-bottom: none; border-top: none" class="right">60,000</td>
+  </tr>
+  <tr>
+    <td style="border-bottom: none; border-top: none text-align: left">2 送出し機関関連費3月分（3年目：11ヶ月）</td>
+    <td style="border-bottom: none; border-top: none" class="right">5,000</td>
+    <td style="border-bottom: none; border-top: none" class="right">3</td>
+    <td style="border-bottom: none; border-top: none">-</td>
+    <td style="border-bottom: none; border-top: none" class="right">-</td>
+    <td style="border-bottom: none; border-top: none" class="right">15,000</td>
+  </tr>
+  <tr>
+    <td colspan="5" class="right">小計</td>
+    <td class="right">75,000</td>
+  </tr>
+  <tr>
+    <td colspan="5" class="right">消費税額 10%</td>
+    <td class="right">6,000</td>
+  </tr>
+  <tr>
+    <td colspan="5" class="left" style="
+    min-height: 100px;
+    height: 100px;
+    align-content: flex-start;
+">
+      【実習費等・その他】<br>
+      別紙(実習経費明細書)参照
+    </td>
+    <td class="right"></td>
+  </tr>
+  <tr>
+    <td colspan="5" class="right bold" style="
+      border-bottom: none;
+      border-left:  none;
+      padding: 0px;
+    ">
+      <span style="padding: 6px 35px 6px 20px; background: #d7d4d4;border-bottom: 1px solid black;border-left: 1px solid black;">ご請求金額</span>
+    </td>
+    <td class="right bold" style="background: #d7d4d4">￥81,000</td>
+  </tr>
+</table>
+
+<div class="note">
+  参考
+  <div style="padding-left:20px;">
+  【その他】<br>
+  【振込先】関西みらい銀行 八尾本町支店（普通）0041533<br>
+  大阪医療介護協同組合（ｵｵｻｶｲﾘｮｳｶｲｺﾞｷｮｳﾄﾞｳｸﾐｱｲ）<br>
+  恐れ入りますが、振込手数料は貴社にてご負担ください。
+  </div>
+</div>
+
+<p style="margin-top: 30px;">お振込み期限：　2025年 3月 31日</p>
+
+<p class="right">2025年2月20日</p>
+
+</body>
+</html>

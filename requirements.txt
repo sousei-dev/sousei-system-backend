@@ -1,0 +1,48 @@
+# FastAPI 및 웹 프레임워크
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# 데이터베이스
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.12.1
+
+# 인증 및 보안
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# HTTP 클라이언트
+httpx==0.25.2
+requests==2.31.0
+
+# PDF 생성
+weasyprint==60.2
+jinja2==3.1.2
+
+# 이미지 처리
+Pillow==10.1.0
+
+# 환경 변수 관리
+python-dotenv==1.0.0
+
+# 날짜/시간 처리
+python-dateutil==2.8.2
+
+# UUID 처리
+uuid==1.30
+
+# CORS 지원
+fastapi-cors==0.0.6
+
+# 로깅
+loguru==0.7.2
+
+# 개발 도구 (선택사항)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.11.0
+flake8==6.1.0
+
+# 운영 환경 추가 패키지
+gunicorn==21.2.0
