@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, status, UploadFile, File, Response
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
@@ -52,6 +53,7 @@ origins = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
     "http://127.0.0.1:8080",
+    "https://system.sousei-group.com",
 ]
 
 app.add_middleware(
@@ -4136,4 +4138,298 @@ def get_student_monthly_utility_allocation(
         "billing_period": f"{prev_year}년 {prev_month}월",
         "utilities": utilities_result,
         "total_amount": round(total_amount, 2)
+    }
+
+@app.post("/download-monthly-utilities/{year}/{month}")
+async def download_monthly_utilities(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """해당 년도 월의 모든 방 공과금 PDF 다운로드"""
+    # 월 유효성 검사
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="월은 1-12 사이의 값이어야 합니다")
+
+    # 전달 기준으로 시작/종료일 계산 (예: 7월 조회 시 6월 1일~6월 30일)
+    if month == 1:
+        prev_year = year - 1
+        prev_month = 12
+    else:
+        prev_year = year
+        prev_month = month - 1
+    
+    start_date = date(prev_year, prev_month, 1)
+    if prev_month == 12:
+        end_date = date(prev_year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end_date = date(prev_year, prev_month + 1, 1) - timedelta(days=1)
+
+    target_charge_month = date(year, month, 1)
+
+    # 모든 방의 공과금이 있는 방들 조회
+    rooms_with_utilities = db.query(Room).options(
+        joinedload(Room.building)
+    ).join(RoomUtility).filter(
+        RoomUtility.charge_month == target_charge_month
+    ).distinct().all()
+
+    if not rooms_with_utilities:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"{year}년 {month}월에 청구되는 공과금이 있는 방이 없습니다."
+        )
+
+    # 각 방별 공과금 데이터 수집
+    rooms_data = []
+    
+    for room in rooms_with_utilities:
+        # 해당 방의 모든 공과금 조회
+        utilities = db.query(RoomUtility).filter(
+            RoomUtility.room_id == room.id,
+            RoomUtility.charge_month == target_charge_month
+        ).all()
+
+        # 해당 방의 모든 거주자 조회
+        residents = db.query(Resident).options(
+            joinedload(Resident.student)
+        ).filter(
+            Resident.room_id == room.id,
+            Resident.check_in_date <= end_date,
+            (Resident.check_out_date.is_(None) | (Resident.check_out_date >= start_date))
+        ).all()
+
+        if not residents:
+            continue
+
+        # 각 공과금별 학생별 배분 계산
+        utilities_data = []
+        for utility in utilities:
+            # 해당 유틸리티 기간 내 방 거주자 전체 쿼리
+            all_residents = db.query(Resident).filter(
+                Resident.room_id == room.id,
+                Resident.check_in_date <= utility.period_end,
+                (Resident.check_out_date.is_(None) | (Resident.check_out_date >= utility.period_start))
+            ).all()
+
+            # 전체 person-day 계산
+            total_person_days = 0
+            for r in all_residents:
+                overlap_in = max(r.check_in_date, utility.period_start)
+                overlap_out = min(r.check_out_date or utility.period_end, utility.period_end)
+                overlap_days = (overlap_out - overlap_in).days + 1 if overlap_in <= overlap_out else 0
+                total_person_days += overlap_days
+
+            # 1일당 요금 계산
+            per_day = float(utility.total_amount) / total_person_days if total_person_days > 0 else 0
+
+            # 각 학생별 부담액 계산
+            student_allocations = []
+            for resident in residents:
+                stu_in = max(resident.check_in_date, utility.period_start)
+                stu_out = min(resident.check_out_date or utility.period_end, utility.period_end)
+                days = (stu_out - stu_in).days + 1 if stu_in <= stu_out else 0
+                
+                if days > 0:
+                    my_amount = round(per_day * days, 2)
+                    student_allocations.append({
+                        "student_id": str(resident.student.id),
+                        "student_name": resident.student.name,
+                        "days": days,
+                        "amount": my_amount
+                    })
+
+            utilities_data.append({
+                "utility_type": utility.utility_type,
+                "period_start": utility.period_start.strftime("%Y-%m-%d"),
+                "period_end": utility.period_end.strftime("%Y-%m-%d"),
+                "total_amount": float(utility.total_amount),
+                "per_day": round(per_day, 2),
+                "total_person_days": total_person_days,
+                "student_allocations": student_allocations
+            })
+
+        if utilities_data:
+            rooms_data.append({
+                "room_id": str(room.id),
+                "room_number": room.room_number,
+                "building_name": room.building.name if room.building else None,
+                "utilities": utilities_data
+            })
+
+    # HTML 템플릿 생성
+    html_content = generate_utilities_html(rooms_data, year, month, prev_year, prev_month)
+    
+    # PDF 생성
+    pdf_file = HTML(string=html_content).write_pdf()
+    
+    # 임시 파일로 저장 후 다운로드
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+        tmp_file.write(pdf_file)
+        tmp_file_path = tmp_file.name
+    
+    return FileResponse(
+        tmp_file_path,
+        media_type='application/pdf',
+        filename=f'光熱費_{year}年_{month}月.pdf'
+    )
+
+def generate_utilities_html(rooms_data, year, month, prev_year, prev_month):
+    """공과금 HTML 템플릿 생성"""
+    from datetime import datetime
+    
+    # 각 방별로 학생별 부담금액 계산
+    processed_rooms = []
+    
+    for room in rooms_data:
+        # 학생별 부담금액 계산 (공과금 + 월세)
+        student_totals = {}
+        
+        # 월세 계산 (한 달 30,000엔, 하루 1,000엔)
+        daily_rent = 1000     # 하루 1,000엔
+        
+        for utility in room['utilities']:
+            for allocation in utility['student_allocations']:
+                student_name = allocation['student_name']
+                if student_name not in student_totals:
+                    student_totals[student_name] = {
+                        'rent': 0,        # 월세
+                        'electricity': 0,  # 전기
+                        'water': 0,       # 수도
+                        'gas': 0,         # 가스
+                        'total': 0        # 합계
+                    }
+                
+                amount = allocation['amount']
+                student_totals[student_name]['total'] += amount
+                
+                if utility['utility_type'] == 'electricity':
+                    student_totals[student_name]['electricity'] = amount
+                elif utility['utility_type'] == 'water':
+                    student_totals[student_name]['water'] = amount
+                elif utility['utility_type'] == 'gas':
+                    student_totals[student_name]['gas'] = amount
+        
+        # 월세 계산 및 추가
+        for student_name in student_totals:
+            # 해당 학생의 거주일수 계산
+            student_days = 0
+            for utility in room['utilities']:
+                for allocation in utility['student_allocations']:
+                    if allocation['student_name'] == student_name:
+                        student_days = max(student_days, allocation['days'])
+                        break
+            
+            # 월세 계산 (거주일수 기준)
+            rent_amount = daily_rent * student_days
+            student_totals[student_name]['rent'] = rent_amount
+            student_totals[student_name]['total'] += rent_amount
+        
+        # 방 정보와 학생별 부담금액을 함께 저장
+        processed_room = {
+            'building_name': room['building_name'],
+            'room_number': room['room_number'],
+            'student_totals': student_totals
+        }
+        processed_rooms.append(processed_room)
+    
+    # Jinja2 템플릿 렌더링
+    template = templates.get_template("monthly_utilities.html")
+    html_content = template.render(
+        year=year,
+        month=month,
+        prev_year=prev_year,
+        prev_month=prev_month,
+        created_date=datetime.now().strftime('%Y年%m月%d日'),
+        rooms_data=processed_rooms
+    )
+    
+    return html_content
+
+@app.get("/validate-monthly-utilities/{year}/{month}")
+def validate_monthly_utilities(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """해당 년도 월의 모든 방 공과금 입력 상태 검증"""
+    # 월 유효성 검사
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="월은 1-12 사이의 값이어야 합니다")
+
+    # 해당 월의 시작일과 종료일 계산
+    start_date = date(year, month, 1)
+    if month == 12:
+        end_date = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end_date = date(year, month + 1, 1) - timedelta(days=1)
+
+    target_charge_month = date(year, month, 1)
+
+    # 해당 월에 거주자가 있는 모든 방 조회
+    rooms_with_residents = db.query(Room).options(
+        joinedload(Room.building)
+    ).join(Resident).filter(
+        Resident.check_in_date <= end_date,
+        (Resident.check_out_date.is_(None) | (Resident.check_out_date >= start_date))
+    ).distinct().all()
+
+    if not rooms_with_residents:
+        return {
+            "is_valid": False,
+            "message": f"{year}년 {month}월에 거주자가 있는 방이 없습니다.",
+            "missing_rooms": [],
+            "total_rooms": 0,
+            "valid_rooms": 0,
+            "missing_rooms_count": 0
+        }
+
+    # 각 방별 공과금 입력 상태 확인
+    valid_rooms = []
+    missing_rooms = []
+    required_utility_types = ['electricity', 'water', 'gas']  # 필수 공과금 유형
+
+    for room in rooms_with_residents:
+        # 해당 방의 공과금 조회
+        utilities = db.query(RoomUtility).filter(
+            RoomUtility.room_id == room.id,
+            RoomUtility.charge_month == target_charge_month
+        ).all()
+
+        # 입력된 공과금 유형 확인
+        input_utility_types = [utility.utility_type for utility in utilities]
+        
+        # 누락된 공과금 유형 확인
+        missing_utility_types = [ut for ut in required_utility_types if ut not in input_utility_types]
+        
+        room_info = {
+            "room_id": str(room.id),
+            "room_number": room.room_number,
+            "building_name": room.building.name if room.building else None,
+            "input_utilities": input_utility_types,
+            "missing_utilities": missing_utility_types
+        }
+
+        if missing_utility_types:
+            missing_rooms.append(room_info)
+        else:
+            valid_rooms.append(room_info)
+
+    # 검증 결과
+    is_valid = len(missing_rooms) == 0
+    
+    return {
+        "is_valid": is_valid,
+        "message": f"{year}년 {month}월 공과금 입력 상태: {'완료' if is_valid else '미완료'}",
+        "missing_rooms": missing_rooms,
+        "valid_rooms": valid_rooms,
+        "total_rooms": len(rooms_with_residents),
+        "valid_rooms_count": len(valid_rooms),
+        "missing_rooms_count": len(missing_rooms),
+        "required_utility_types": required_utility_types,
+        "year": year,
+        "month": month
     }
