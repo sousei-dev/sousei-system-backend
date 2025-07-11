@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{{ year }}년 {{ month }}월 야칭공과금</title>
+    <style>
+        body { font-family: 'Noto Sans KR', sans-serif; }
+        .header { text-align: center; margin-bottom: 30px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        .total { font-weight: bold; background-color: #e6f3ff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ year }}년 {{ month }}월 야칭공과금</h1>
+        <p>생성일: {{ current_date }}</p>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>학생명</th>
+                <th>야칭</th>
+                <th>공과금</th>
+                <th>합계</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for student in students %}
+            <tr>
+                <td>{{ student.name }}</td>
+                <td>{{ student.yaching }}원</td>
+                <td>{{ student.utilities }}원</td>
+                <td>{{ student.total }}원</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>

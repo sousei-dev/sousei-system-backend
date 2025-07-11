@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{{ year }}年{{ month }}月光熱費明細</title>
+    <style>
+        body { 
+            font-family: 'Noto Sans JP', Arial, sans-serif; 
+            margin: 20px;
+            font-size: 12px;
+        }
+        .header { 
+            text-align: center; 
+            margin-bottom: 30px; 
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+        }
+        .header h1 { 
+            margin: 0; 
+            color: #333; 
+            font-size: 24px;
+        }
+        .header p { 
+            margin: 5px 0; 
+            color: #666;
+            font-size: 14px;
+        }
+        .room-section { 
+            margin-bottom: 30px; 
+            page-break-inside: avoid;
+        }
+        .room-title { 
+            background-color: #f0f0f0; 
+            padding: 10px; 
+            font-weight: bold; 
+            font-size: 16px;
+            border-left: 4px solid #007bff;
+        }
+        .utility-table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 10px;
+            font-size: 11px;
+        }
+        .utility-table th, .utility-table td { 
+            border: 1px solid #ddd; 
+            padding: 6px; 
+            text-align: center; 
+        }
+        .utility-table th { 
+            background-color: #f8f9fa; 
+            font-weight: bold;
+        }
+        .utility-header { 
+            background-color: #e3f2fd; 
+            font-weight: bold;
+        }
+        .student-row { 
+            background-color: #fafafa;
+        }
+        .total-row { 
+            background-color: #fff3cd; 
+            font-weight: bold;
+        }
+        .utility-type { 
+            background-color: #e8f5e8; 
+            font-weight: bold;
+            text-align: left;
+        }
+        .summary { 
+            margin-top: 20px; 
+            padding: 10px; 
+            background-color: #f8f9fa; 
+            border-radius: 5px;
+        }
+        .page-break { 
+            page-break-before: always; 
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ year }}年{{ month }}月光熱費明細</h1>
+        <p>請求期間: {{ prev_year }}年{{ prev_month }}月</p>
+        <p>作成日: {{ created_date }}</p>
+    </div>
+
+    {% for room in rooms_data %}
+        {% if loop.index > 1 %}
+            <div class="page-break"></div>
+        {% endif %}
+        
+        <div class="room-section">
+            <div class="room-title">
+                {{ room.building_name }} - {{ room.room_number }}号
+            </div>
+            
+            <table class="utility-table">
+                <tr class="utility-header">
+                    <th>学生名</th>
+                    <th>家賃</th>
+                    <th>電気</th>
+                    <th>水道</th>
+                    <th>ガス</th>
+                    <th>合計</th>
+                </tr>
+                
+                {% for student_name, amounts in room.student_totals.items() %}
+                <tr class="student-row">
+                    <td>{{ student_name }}</td>
+                    <td>{{ "{:,}".format(amounts.rent | int) }}円</td>
+                    <td>{{ "{:,}".format(amounts.electricity | int) }}円</td>
+                    <td>{{ "{:,}".format(amounts.water | int) }}円</td>
+                    <td>{{ "{:,}".format(amounts.gas | int) }}円</td>
+                    <td>{{ "{:,}".format(amounts.total | int) }}円</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    {% endfor %}
+</body>
+</html> 

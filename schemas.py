@@ -45,6 +45,8 @@ class StudentCreate(BaseModel):
     student_type: Optional[str] = None
     current_room_id: Optional[Union[UUID, str]] = None
     interview_date: Optional[Union[date, str]] = None
+    facebook_name: Optional[str] = None
+    visa_year: Optional[str] = None
     
     # 방 관련 정보
     room_id: Optional[str] = Field(None, description="방 ID (기존 방에 배정하는 경우)")
@@ -114,6 +116,8 @@ class StudentUpdate(BaseModel):
     passport_expiration_date: Optional[date] = None
     student_type: Optional[str] = None
     current_room_id: Optional[UUID] = None
+    facebook_name: Optional[str] = None
+    visa_year: Optional[str] = None
 
 class StudentResponse(BaseModel):
     id: str
@@ -145,6 +149,8 @@ class StudentResponse(BaseModel):
     experience_over_2_years: Optional[bool] = None
     status: Optional[str] = None
     arrival_type: Optional[str] = None
+    facebook_name: Optional[str] = None
+    visa_year: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -525,6 +531,50 @@ class UtilityAllocationResponse(BaseModel):
         json_encoders = {
             UUID: str
         }
+
+class ResidenceCardHistoryCreate(BaseModel):
+    student_id: str = Field(..., description="학생 ID")
+    card_number: str = Field(..., description="카드 번호")
+    start_date: str = Field(..., description="시작일 (YYYY-MM-DD)")
+    expiry_date: str = Field(..., description="만료일 (YYYY-MM-DD)")
+    note: Optional[str] = Field(None, description="비고사항")
+
+class ResidenceCardHistoryUpdate(BaseModel):
+    card_number: Optional[str] = Field(None, description="카드 번호")
+    start_date: Optional[str] = Field(None, description="시작일 (YYYY-MM-DD)")
+    expiry_date: Optional[str] = Field(None, description="만료일 (YYYY-MM-DD)")
+    note: Optional[str] = Field(None, description="비고사항")
+
+class ResidenceCardHistoryResponse(BaseModel):
+    id: str
+    student_id: str
+    card_number: str
+    start_date: date
+    expiry_date: date
+    registered_at: datetime
+    note: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class VisaInfoUpdate(BaseModel):
+    residence_card_number: Optional[str] = Field(None, description="카드 번호")
+    residence_card_start: Optional[Union[date, str]] = Field(None, description="시작일")
+    residence_card_expiry: Optional[Union[date, str]] = Field(None, description="만료일")
+    passport_number: Optional[str] = Field(None, description="여권 번호")
+    passport_expiration_date: Optional[Union[date, str]] = Field(None, description="여권 만료일")
+    visa_application_date: Optional[Union[date, str]] = Field(None, description="비자 신청일")
+    note: Optional[str] = Field(None, description="비고사항")
+
+    @field_validator('residence_card_start', 'residence_card_expiry', 'passport_expiration_date', 'visa_application_date', mode='before')
+    @classmethod
+    def validate_date_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
 
 class AutoAllocationRequest(BaseModel):
     allocation_method: str = Field(..., description="배분 방법 (days_based 또는 usage_based)")

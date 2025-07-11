@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
-from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility
-from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse
+from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory
+from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate
 import uuid
 from uuid import UUID
 from passlib.hash import bcrypt
@@ -39,7 +39,11 @@ ACCESS_TOKEN_EXPIRE_DAYS = 7  # 7일로 변경
 
 # .env 파일에서 Supabase 설정 로드
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # service_role key 사용
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")  # anon key 사용 (로그인용)
+print("--SUPABASE_URL:", SUPABASE_URL)
+print("--SUPABASE_ANON_KEY:", SUPABASE_KEY[:10])  # 앞부분만 찍기
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
@@ -64,9 +68,6 @@ app.add_middleware(
     allow_headers=["*"],    # 모든 HTTP 헤더 허용
 )
 
-# Supabase 클라이언트 초기화
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 def get_db():
     db = SessionLocal()
     try:
@@ -89,71 +90,153 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def get_token_header(token: str = Depends(HTTPBearer())):
     return token.credentials
 
-# 현재 사용자 가져오기
-async def get_current_user(token: str = Depends(get_token_header), db: Session = Depends(get_db)):
+# 현재 사용자 가져오기 (Supabase Auth 사용)
+async def get_current_user(token: str = Depends(get_token_header)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
+        # Supabase Auth 토큰 검증
+        user = supabase.auth.get_user(token)
+        return user.user
+    except Exception as e:
+        print(f"토큰 검증 에러: {e}")
         raise credentials_exception
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise credentials_exception
-    return user
 
 # 로그인 엔드포인트
 @app.post("/login")
-def login(user: UserLogin, db: Session = Depends(get_db)):
-    # 이메일로 사용자 찾기
-    db_user = db.query(User).filter(User.email == user.email).first()
-    
-    # 이메일이 존재하지 않는 경우
-    if not db_user:
+async def login(user: UserLogin):
+    try:
+        
+        # Supabase Auth를 사용한 로그인
+        auth_response = supabase.auth.sign_in_with_password({
+            "email": user.email,
+            "password": user.password
+        })
+        
+        # 로그인 성공 시 사용자 정보 반환
+        user_data = auth_response.user
+        session = auth_response.session
+        
+        return {
+            "message": "로그인 성공",
+            "user_id": user_data.id,
+            "email": user_data.email,
+            "access_token": session.access_token,
+            "refresh_token": session.refresh_token,
+            "token_type": "bearer"
+        }
+        
+    except Exception as e:
+        # Supabase Auth 에러 처리
+        error_message = str(e)
+        
+        if "Invalid login credentials" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="이메일 또는 비밀번호가 올바르지 않습니다."
+            )
+        elif "Email not confirmed" in error_message:
+            # 이메일 인증 없이 로그인 허용 (개발 환경용)
+            try:
+                # Supabase 대시보드에서 이메일 인증을 비활성화하거나
+                # 해당 사용자의 이메일 인증 상태를 수동으로 true로 변경해야 합니다.
+                
+                # 임시 해결책: 에러 메시지에 해결 방법 안내
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="이메일 인증이 필요합니다. 해결 방법: 1) Supabase 대시보드 → Authentication → Settings → 'Enable email confirmations' 체크 해제, 2) 또는 Authentication → Users에서 해당 사용자의 'Email confirmed'를 true로 변경"
+                )
+            except Exception as retry_error:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="이메일 인증이 필요합니다. Supabase 대시보드에서 이메일 인증 설정을 확인해주세요."
+                )
+        elif "Invalid API key" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API 키가 올바르지 않습니다. Supabase 설정을 확인해주세요."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"로그인 중 오류가 발생했습니다: {error_message}"
+            )
+
+# 로그아웃 엔드포인트
+@app.post("/logout")
+async def logout():
+    try:
+        # Supabase Auth 로그아웃
+        supabase.auth.sign_out()
+        return {"message": "로그아웃 성공"}
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="존재하지 않는 이메일입니다."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"로그아웃 중 오류가 발생했습니다: {str(e)}"
         )
-    
-    # 비밀번호가 틀린 경우
-    if not bcrypt.verify(user.password, db_user.password):
+
+# 토큰 갱신 엔드포인트
+@app.post("/refresh-token")
+async def refresh_token(refresh_token: str):
+    try:
+        # Supabase Auth 토큰 갱신
+        auth_response = supabase.auth.refresh_session(refresh_token)
+        
+        return {
+            "message": "토큰 갱신 성공",
+            "access_token": auth_response.session.access_token,
+            "refresh_token": auth_response.session.refresh_token,
+            "token_type": "bearer"
+        }
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="비밀번호가 일치하지 않습니다."
+            detail=f"토큰 갱신 실패: {str(e)}"
         )
-    
-    # 로그인 성공
-    access_token_expires = timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    access_token = create_access_token(
-        data={"sub": str(db_user.id)}, expires_delta=access_token_expires  # UUID를 문자열로 변환
-    )
-    
-    return {
-        "message": "로그인 성공",
-        "user_id": str(db_user.id),  # UUID를 문자열로 변환
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
 
 # 회원가입 엔드포인트
 @app.post("/signup")
-def signup(user: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == user.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="이미 가입된 이메일입니다.")
-
-    hashed_pw = bcrypt.hash(user.password)
-    new_user = User(id=str(uuid.uuid4()), email=user.email, password=hashed_pw)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return {"message": "회원가입 성공", "user_id": new_user.id}
+async def signup(user: UserCreate):
+    try:
+        # Supabase Auth를 사용한 회원가입 (이메일 인증 없이)
+        auth_response = supabase.auth.sign_up({
+            "email": user.email,
+            "password": user.password,
+            "options": {
+                "email_confirm": False  # 이메일 인증 없이 가입
+            }
+        })
+        
+        # 회원가입 성공 시 사용자 정보 반환
+        user_data = auth_response.user
+        
+        return {
+            "message": "회원가입 성공",
+            "user_id": user_data.id,
+            "email": user_data.email
+        }
+        
+    except Exception as e:
+        # Supabase Auth 에러 처리
+        error_message = str(e)
+        if "User already registered" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="이미 가입된 이메일입니다."
+            )
+        elif "Password should be at least" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="비밀번호는 최소 6자 이상이어야 합니다."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"회원가입 중 오류가 발생했습니다: {error_message}"
+            )
 
 # 학생 목록 조회 (인증 필요)
 @app.get("/students")
@@ -319,6 +402,8 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
         "passport_expiration_date": student.passport_expiration_date,
         "student_type": student.student_type,
         "current_room_id": str(student.current_room_id) if student.current_room_id else None,
+        "facebook_name": student.facebook_name,
+        "visa_year": student.visa_year,
         "company": {
             "id": str(student.company.id),
             "name": student.company.name
@@ -373,6 +458,7 @@ def create_student(
             id=str(uuid.uuid4()),
             name=student.name,
             company_id=parse_uuid(student.company_id),
+            grade_id=parse_uuid(student.grade_id),
             consultant=student.consultant,
             cooperation_submitted_date=parse_date(student.cooperation_submitted_date),
             cooperation_submitted_place=clean_value(student.cooperation_submitted_place),
@@ -402,9 +488,24 @@ def create_student(
             passport_expiration_date=parse_date(student.passport_expiration_date),
             student_type=clean_value(student.student_type),
             current_room_id=parse_uuid(student.current_room_id),
+            facebook_name=clean_value(student.facebook_name),
+            visa_year=clean_value(student.visa_year),
         )
         db.add(new_student)
         db.flush()  # ID 생성을 위해 flush
+
+        # Residence Card 히스토리 저장 (residence card 정보가 있는 경우)
+        if student.residence_card_number and student.residence_card_start and student.residence_card_expiry:
+            residence_card_history = ResidenceCardHistory(
+                id=str(uuid.uuid4()),
+                student_id=new_student.id,
+                card_number=student.residence_card_number,
+                start_date=parse_date(student.residence_card_start),
+                expiry_date=parse_date(student.residence_card_expiry),
+                year=clean_value(student.visa_year),
+                note=""
+            )
+            db.add(residence_card_history)
 
         # 방 배정 및 입주 처리
         room_info = None
@@ -554,10 +655,35 @@ def update_student(
                 detail="존재하지 않는 회사입니다."
             )
 
+    # Residence Card 정보가 변경되었는지 확인
+    residence_card_changed = False
+    if (student_update.residence_card_number and 
+        student_update.residence_card_start and 
+        student_update.residence_card_expiry):
+        
+        # 기존 정보와 비교
+        if (student.residence_card_number != student_update.residence_card_number or
+            student.residence_card_start != student_update.residence_card_start or
+            student.residence_card_expiry != student_update.residence_card_expiry):
+            residence_card_changed = True
+
     # 학생 정보 업데이트
     update_data = student_update.dict(exclude_unset=True)
     for field, value in update_data.items():
         setattr(student, field, value)
+
+    # Residence Card 히스토리 저장 (변경된 경우)
+    if residence_card_changed:
+        residence_card_history = ResidenceCardHistory(
+            id=str(uuid.uuid4()),
+            student_id=student.id,
+            card_number=student_update.residence_card_number,
+            start_date=student_update.residence_card_start,
+            expiry_date=student_update.residence_card_expiry,
+            note="정보 업데이트"
+        )
+        db.add(residence_card_history)
+        print(f"DEBUG: Residence Card 히스토리 생성 완료 (업데이트) - student_id: {student.id}")
 
     try:
         db.commit()
@@ -578,6 +704,159 @@ def update_student(
         raise HTTPException(
             status_code=500,
             detail=f"학생 정보 수정 중 오류가 발생했습니다: {str(e)}"
+        )
+
+# Residence Card 히스토리 조회
+@app.get("/students/{student_id}/residence-card-history")
+def get_student_residence_card_history(
+    student_id: str,
+    page: int = Query(1, description="페이지 번호", ge=1),
+    size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 학생 존재 여부 확인
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="학생을 찾을 수 없습니다."
+        )
+
+    # Residence Card 히스토리 조회
+    query = db.query(ResidenceCardHistory).filter(
+        ResidenceCardHistory.student_id == student_id
+    ).order_by(ResidenceCardHistory.registered_at.desc())
+
+    # 전체 항목 수 계산
+    total_count = query.count()
+
+    # 페이지네이션 적용
+    histories = query.offset((page - 1) * size).limit(size).all()
+
+    # 전체 페이지 수 계산
+    total_pages = (total_count + size - 1) // size
+
+    # 응답 데이터 준비
+    result = []
+    for history in histories:
+        history_data = {
+            "id": str(history.id),
+            "student_id": str(history.student_id),
+            "card_number": history.card_number,
+            "start_date": history.start_date,
+            "expiry_date": history.expiry_date,
+            "year": history.year,
+            "registered_at": history.registered_at,
+            "note": history.note
+        }
+        result.append(history_data)
+
+    return {
+        "items": result,
+        "total": total_count,
+        "page": page,
+        "size": size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1
+    }
+
+# 비자 정보만 변경하는 API
+@app.put("/students/{student_id}/visa-info")
+def update_student_visa_info(
+    student_id: str,
+    visa_update: VisaInfoUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 학생 존재 여부 확인
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="학생을 찾을 수 없습니다."
+        )
+
+    # 헬퍼 함수들
+    def clean_value(value):
+        if value == "" or value is None:
+            return None
+        return value
+    
+    def parse_date(value):
+        if value is None or value == "":
+            return None
+        if isinstance(value, date):
+            return value
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except:
+            return None
+
+    # Residence Card 정보가 변경되었는지 확인
+    residence_card_changed = False
+    if (visa_update.residence_card_number and 
+        visa_update.residence_card_start and 
+        visa_update.residence_card_expiry):
+        
+        # 기존 정보와 비교
+        if (student.residence_card_number != visa_update.residence_card_number or
+            student.residence_card_start != parse_date(visa_update.residence_card_start) or
+            student.residence_card_expiry != parse_date(visa_update.residence_card_expiry)):
+            residence_card_changed = True
+
+    # 학생 비자 정보 업데이트
+    update_data = visa_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "note":  # note는 학생 테이블에 저장하지 않음
+            continue
+        if field in ["residence_card_start", "residence_card_expiry", "passport_expiration_date", "visa_application_date"]:
+            setattr(student, field, parse_date(value))
+        else:
+            setattr(student, field, clean_value(value))
+
+    # Residence Card 히스토리 저장 (변경된 경우)
+    if residence_card_changed:
+        residence_card_history = ResidenceCardHistory(
+            id=str(uuid.uuid4()),
+            student_id=student.id,
+            card_number=visa_update.residence_card_number,
+            start_date=parse_date(visa_update.residence_card_start),
+            expiry_date=parse_date(visa_update.residence_card_expiry),
+            note=visa_update.note if visa_update.note else "비자 정보 업데이트"
+        )
+        db.add(residence_card_history)
+        print(f"DEBUG: Residence Card 히스토리 생성 완료 (비자 정보 업데이트) - student_id: {student.id}")
+
+    try:
+        db.commit()
+        db.refresh(student)
+        
+        # 응답 데이터 준비
+        response_data = {
+            "id": str(student.id),
+            "name": student.name,
+            "residence_card_number": student.residence_card_number,
+            "residence_card_start": student.residence_card_start,
+            "residence_card_expiry": student.residence_card_expiry,
+            "passport_number": student.passport_number,
+            "passport_expiration_date": student.passport_expiration_date,
+            "visa_application_date": student.visa_application_date,
+            "message": "비자 정보가 성공적으로 업데이트되었습니다."
+        }
+        
+        if residence_card_changed:
+            response_data["history_created"] = True
+            response_data["history_note"] = visa_update.note if visa_update.note else "비자 정보 업데이트"
+        
+        return response_data
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"비자 정보 수정 중 오류가 발생했습니다: {str(e)}"
         )
 
 @app.get("/users")
@@ -657,20 +936,25 @@ async def upload_avatar(
         file_path = f"avatars/{current_user.id}/{file.filename}"
         file_content = await file.read()
         
-        # Storage에 파일 업로드
-        result = supabase.storage.from_("avatars").upload(
-            file_path,
-            file_content,
-            {"content-type": file.content_type}
-        )
+        try:
+            print(f"file_path: {file_path}")
+            print(f"file_content type: {type(file_content)}, size: {len(file_content)}")
+            print(f"file content-type: {file.content_type}")
+            result = supabase.storage.from_("avatars").upload(
+                file_path,
+                file_content,
+                {"content-type": file.content_type}
+            )
+            print(f"Storage upload result: {result}")
+        except Exception as storage_error:
+            print(f"Storage 업로드 에러: {storage_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Storage 연결 오류: {str(storage_error)}"
+            )
 
         # 파일 URL 가져오기
         file_url = supabase.storage.from_("avatars").get_public_url(file_path)
-
-        # 데이터베이스에 URL 저장
-        current_user.avatar = file_url
-        db.commit()
-
         return {
             "message": "프로필 이미지가 성공적으로 업로드되었습니다.",
             "avatar_url": file_url
@@ -724,15 +1008,22 @@ async def upload_student_avatar(
         file_path = f"student_avatars/{student_id}/{file.filename}"
         file_content = await file.read()
         
-        # Storage에 파일 업로드
-        result = supabase.storage.from_("avatars").upload(
-            file_path,
-            file_content,
-            {"content-type": file.content_type}
-        )
-
-        # 파일 URL 가져오기
-        file_url = supabase.storage.from_("avatars").get_public_url(file_path)
+        try:
+            print(f"file_path: {file_path}")
+            print(f"file_content type: {type(file_content)}, size: {len(file_content)}")
+            print(f"file content-type: {file.content_type}")
+            result = supabase.storage.from_("avatars").upload(
+                file_path,
+                file_content,
+                {"content-type": file.content_type}
+            )
+            print(f"Storage upload result: {result}")
+        except Exception as storage_error:
+            print(f"Storage 업로드 에러: {storage_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Storage 연결 오류: {str(storage_error)}"
+            )
         return {
             "message": "학생 프로필 이미지가 성공적으로 업로드되었습니다.",
             "avatar_url": file_url

@@ -57,6 +57,8 @@ class Student(Base):
     passport_expiration_date = Column(Date)
     student_type = Column(String)
     current_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"))
+    facebook_name = Column(String)
+    visa_year = Column(String)
 
     # 관계 설정
     company = relationship("Company", back_populates="students")
@@ -64,6 +66,7 @@ class Student(Base):
     invoices = relationship("Invoice", back_populates="student", cascade="all, delete-orphan")
     current_room = relationship("Room", back_populates="current_residents")
     residences = relationship("Resident", back_populates="student")
+    residence_card_histories = relationship("ResidenceCardHistory", foreign_keys="ResidenceCardHistory.student_id", cascade="all, delete-orphan")
 
 class Company(Base):
     __tablename__ = "companies"
@@ -278,4 +281,19 @@ class UtilityAllocation(Base):
 
     # 관계 설정
     utility = relationship("RoomUtility", foreign_keys=[utility_id])
+    student = relationship("Student", foreign_keys=[student_id])
+
+class ResidenceCardHistory(Base):
+    __tablename__ = "residence_card_histories"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    card_number = Column(String, nullable=False)
+    start_date = Column(Date, nullable=False)
+    expiry_date = Column(Date, nullable=False)
+    registered_at = Column(DateTime, default=datetime.utcnow)
+    year = Column(String)
+    note = Column(String)
+
+    # 관계 설정
     student = relationship("Student", foreign_keys=[student_id])
