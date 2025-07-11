@@ -297,3 +297,22 @@ class ResidenceCardHistory(Base):
 
     # 관계 설정
     student = relationship("Student", foreign_keys=[student_id])
+
+class DatabaseLog(Base):
+    __tablename__ = "database_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    table_name = Column(String, nullable=False)  # 테이블 이름
+    record_id = Column(String, nullable=False)   # 레코드 ID (UUID 문자열)
+    action = Column(String, nullable=False)      # CREATE, UPDATE, DELETE
+    user_id = Column(String, nullable=True)      # 작업한 사용자 ID
+    old_values = Column(Text, nullable=True)     # 변경 전 값 (JSON)
+    new_values = Column(Text, nullable=True)     # 변경 후 값 (JSON)
+    changed_fields = Column(Text, nullable=True) # 변경된 필드들 (JSON)
+    ip_address = Column(String, nullable=True)   # IP 주소
+    user_agent = Column(Text, nullable=True)     # User Agent
+    created_at = Column(DateTime, default=datetime.utcnow)
+    note = Column(Text, nullable=True)           # 추가 메모
+
+    # 인덱스 추가 (파티셔닝은 나중에 필요시 추가)
+    __table_args__ = ()

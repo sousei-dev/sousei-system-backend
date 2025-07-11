@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
-from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory
+from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog
 from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate
 import uuid
+import json
 from uuid import UUID
 from passlib.hash import bcrypt
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,11 +40,15 @@ ACCESS_TOKEN_EXPIRE_DAYS = 7  # 7일로 변경
 
 # .env 파일에서 Supabase 설정 로드
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")  # anon key 사용 (로그인용)
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")  # anon key 사용 (로그인용)
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")  # service role key 사용 (Storage용)
 print("--SUPABASE_URL:", SUPABASE_URL)
-print("--SUPABASE_ANON_KEY:", SUPABASE_KEY[:10])  # 앞부분만 찍기
+print("--SUPABASE_ANON_KEY:", SUPABASE_ANON_KEY[:10])  # 앞부분만 찍기
+print("--SUPABASE_SERVICE_KEY:", SUPABASE_SERVICE_KEY[:10] if SUPABASE_SERVICE_KEY else "None")  # 앞부분만 찍기
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+# Storage 작업을 위한 service role 클라이언트
+supabase_storage = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY) if SUPABASE_SERVICE_KEY else supabase
 
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
@@ -67,6 +72,71 @@ app.add_middleware(
     allow_methods=["*"],    # 모든 HTTP 메서드 허용
     allow_headers=["*"],    # 모든 HTTP 헤더 허용
 )
+
+# 로그 유틸리티 함수들
+def create_database_log(
+    db: Session,
+    table_name: str,
+    record_id: str,
+    action: str,
+    user_id: Optional[str] = None,
+    old_values: Optional[dict] = None,
+    new_values: Optional[dict] = None,
+    changed_fields: Optional[list] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    note: Optional[str] = None
+):
+    """데이터베이스 로그 생성"""
+    try:
+        log = DatabaseLog(
+            id=str(uuid.uuid4()),
+            table_name=table_name,
+            record_id=record_id,
+            action=action,
+            user_id=user_id,
+            old_values=json.dumps(old_values, ensure_ascii=False, default=str) if old_values else None,
+            new_values=json.dumps(new_values, ensure_ascii=False, default=str) if new_values else None,
+            changed_fields=json.dumps(changed_fields, ensure_ascii=False) if changed_fields else None,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            note=note
+        )
+        db.add(log)
+        db.commit()  # 로그를 즉시 커밋
+        print(f"로그 생성 완료: {table_name} - {action} - {record_id}")
+        return log
+    except Exception as e:
+        print(f"로그 생성 중 오류: {str(e)}")
+        db.rollback()
+        return None
+
+def get_changed_fields(old_values: dict, new_values: dict) -> list:
+    """변경된 필드들을 찾아서 반환"""
+    changed = []
+    if not old_values or not new_values:
+        return changed
+    
+    for key in new_values:
+        if key in old_values:
+            if old_values[key] != new_values[key]:
+                changed.append(key)
+        else:
+            changed.append(key)
+    
+    return changed
+
+def get_client_ip(request):
+    """클라이언트 IP 주소 가져오기"""
+    if hasattr(request, 'client'):
+        return request.client.host
+    return None
+
+def get_user_agent(request):
+    """User Agent 가져오기"""
+    if hasattr(request, 'headers'):
+        return request.headers.get('user-agent')
+    return None
 
 def get_db():
     db = SessionLocal()
@@ -496,14 +566,27 @@ def create_student(
 
         # Residence Card 히스토리 저장 (residence card 정보가 있는 경우)
         if student.residence_card_number and student.residence_card_start and student.residence_card_expiry:
+            # 같은 년차인지 확인
+            if student.visa_year:
+                existing_history = db.query(ResidenceCardHistory).filter(
+                    ResidenceCardHistory.student_id == new_student.id,
+                    ResidenceCardHistory.year == student.visa_year
+                ).first()
+                
+                if existing_history:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{student.visa_year}년차의 residence card가 이미 존재합니다. 다른 년차를 입력해주세요."
+                    )
+            
             residence_card_history = ResidenceCardHistory(
                 id=str(uuid.uuid4()),
                 student_id=new_student.id,
                 card_number=student.residence_card_number,
                 start_date=parse_date(student.residence_card_start),
                 expiry_date=parse_date(student.residence_card_expiry),
-                year=clean_value(student.visa_year),
-                note=""
+                year=student.visa_year,
+                note="신규 등록"
             )
             db.add(residence_card_history)
 
@@ -590,6 +673,7 @@ def create_student(
             db.commit()
             print(f"DEBUG: 데이터베이스 커밋 완료")
             db.refresh(new_student)
+            
         except Exception as e:
             print(f"DEBUG: 커밋 중 오류 - {str(e)}")
             db.rollback()
@@ -597,6 +681,32 @@ def create_student(
                 status_code=500,
                 detail=f"데이터베이스 저장 중 오류가 발생했습니다: {str(e)}"
             )
+        
+        # 로그 생성 (별도 트랜잭션)
+        try:
+            create_database_log(
+                db=db,
+                table_name="students",
+                record_id=str(new_student.id),
+                action="CREATE",
+                user_id=current_user.id if current_user else None,
+                new_values={
+                    "name": new_student.name,
+                    "email": new_student.email,
+                    "company_id": str(new_student.company_id) if new_student.company_id else None,
+                    "consultant": new_student.consultant,
+                    "phone": new_student.phone,
+                    "grade_id": str(new_student.grade_id) if new_student.grade_id else None,
+                    "residence_card_number": new_student.residence_card_number,
+                    "residence_card_start": str(new_student.residence_card_start) if new_student.residence_card_start else None,
+                    "residence_card_expiry": str(new_student.residence_card_expiry) if new_student.residence_card_expiry else None,
+                    "visa_year": new_student.visa_year
+                },
+                note="학생 신규 등록"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {str(log_error)}")
+            # 로그 생성 실패는 학생 생성에 영향을 주지 않도록 함
 
         return {
             "message": "학생이 성공적으로 생성되었습니다",
@@ -629,6 +739,15 @@ def update_student(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # 헬퍼 함수
+    def parse_date(value):
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    
     # 학생 존재 여부 확인
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
@@ -666,6 +785,20 @@ def update_student(
             student.residence_card_start != student_update.residence_card_start or
             student.residence_card_expiry != student_update.residence_card_expiry):
             residence_card_changed = True
+            
+            # 같은 년차인지 확인
+            if student_update.visa_year:
+                # 기존 히스토리에서 같은 년차가 있는지 확인
+                existing_history = db.query(ResidenceCardHistory).filter(
+                    ResidenceCardHistory.student_id == student_id,
+                    ResidenceCardHistory.year == student_update.visa_year
+                ).first()
+                
+                if existing_history:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{student_update.visa_year}년차의 residence card가 이미 존재합니다. 다른 년차를 입력해주세요."
+                    )
 
     # 학생 정보 업데이트
     update_data = student_update.dict(exclude_unset=True)
@@ -678,16 +811,42 @@ def update_student(
             id=str(uuid.uuid4()),
             student_id=student.id,
             card_number=student_update.residence_card_number,
-            start_date=student_update.residence_card_start,
-            expiry_date=student_update.residence_card_expiry,
+            start_date=parse_date(student_update.residence_card_start),
+            expiry_date=parse_date(student_update.residence_card_expiry),
+            year=student_update.visa_year,
             note="정보 업데이트"
         )
         db.add(residence_card_history)
-        print(f"DEBUG: Residence Card 히스토리 생성 완료 (업데이트) - student_id: {student.id}")
+        print(f"DEBUG: Residence Card 히스토리 생성 완료 (업데이트) - student_id: {student.id}, year: {student_update.visa_year}")
 
     try:
         db.commit()
         db.refresh(student)
+        
+        # 로그 생성 (변경된 경우에만)
+        if residence_card_changed:
+            create_database_log(
+                db=db,
+                table_name="students",
+                record_id=str(student.id),
+                action="UPDATE",
+                user_id=current_user.id if current_user else None,
+                old_values={
+                    "residence_card_number": student.residence_card_number,
+                    "residence_card_start": str(student.residence_card_start) if student.residence_card_start else None,
+                    "residence_card_expiry": str(student.residence_card_expiry) if student.residence_card_expiry else None,
+                    "visa_year": student.visa_year
+                },
+                new_values={
+                    "residence_card_number": student_update.residence_card_number,
+                    "residence_card_start": student_update.residence_card_start,
+                    "residence_card_expiry": student_update.residence_card_expiry,
+                    "visa_year": student_update.visa_year
+                },
+                changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year"],
+                note="학생 정보 업데이트"
+            )
+        
         # UUID를 문자열로 변환
         student_dict = {
             "id": str(student.id),
@@ -805,6 +964,20 @@ def update_student_visa_info(
             student.residence_card_start != parse_date(visa_update.residence_card_start) or
             student.residence_card_expiry != parse_date(visa_update.residence_card_expiry)):
             residence_card_changed = True
+            
+            # 같은 년차인지 확인
+            if visa_update.year:
+                # 기존 히스토리에서 같은 년차가 있는지 확인
+                existing_history = db.query(ResidenceCardHistory).filter(
+                    ResidenceCardHistory.student_id == student_id,
+                    ResidenceCardHistory.year == visa_update.year
+                ).first()
+                
+                if existing_history:
+                    raise HTTPException(
+                        status_code=400,  
+                        detail=f"{visa_update.year}년차의 residence card가 이미 존재합니다. 다른 년차를 입력해주세요."
+                    )
 
     # 학생 비자 정보 업데이트
     update_data = visa_update.dict(exclude_unset=True)
@@ -813,63 +986,221 @@ def update_student_visa_info(
             continue
         if field in ["residence_card_start", "residence_card_expiry", "passport_expiration_date", "visa_application_date"]:
             setattr(student, field, parse_date(value))
+        elif field == "residence_card_number":
+            setattr(student, field, clean_value(value))
+        elif field == "year":
+            setattr(student, field, clean_value(value))
         else:
             setattr(student, field, clean_value(value))
 
     # Residence Card 히스토리 저장 (변경된 경우)
     if residence_card_changed:
+        start_date = parse_date(visa_update.residence_card_start)
+        
         residence_card_history = ResidenceCardHistory(
             id=str(uuid.uuid4()),
             student_id=student.id,
             card_number=visa_update.residence_card_number,
-            start_date=parse_date(visa_update.residence_card_start),
+            start_date=start_date,
             expiry_date=parse_date(visa_update.residence_card_expiry),
+            year=visa_update.year,
             note=visa_update.note if visa_update.note else "비자 정보 업데이트"
         )
         db.add(residence_card_history)
-        print(f"DEBUG: Residence Card 히스토리 생성 완료 (비자 정보 업데이트) - student_id: {student.id}")
+        print(f"DEBUG: Residence Card 히스토리 생성 완료 (비자 정보 업데이트) - student_id: {student.id}, year: {visa_update.year}")
 
     try:
         db.commit()
         db.refresh(student)
         
-        # 응답 데이터 준비
-        response_data = {
-            "id": str(student.id),
-            "name": student.name,
-            "residence_card_number": student.residence_card_number,
-            "residence_card_start": student.residence_card_start,
-            "residence_card_expiry": student.residence_card_expiry,
-            "passport_number": student.passport_number,
-            "passport_expiration_date": student.passport_expiration_date,
-            "visa_application_date": student.visa_application_date,
-            "message": "비자 정보가 성공적으로 업데이트되었습니다."
-        }
-        
-        if residence_card_changed:
-            response_data["history_created"] = True
-            response_data["history_note"] = visa_update.note if visa_update.note else "비자 정보 업데이트"
-        
-        return response_data
-        
     except Exception as e:
+        print(f"DEBUG: 커밋 중 오류 - {str(e)}")
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"비자 정보 수정 중 오류가 발생했습니다: {str(e)}"
+            detail=f"데이터베이스 저장 중 오류가 발생했습니다: {str(e)}"
         )
+    
+    # 로그 생성 (별도 트랜잭션, 변경된 경우에만)
+    if residence_card_changed:
+        try:
+            create_database_log(
+                db=db,
+                table_name="students",
+                record_id=str(student.id),
+                action="UPDATE",
+                user_id=current_user.id if current_user else None,
+                old_values={
+                    "residence_card_number": student.residence_card_number,
+                    "residence_card_start": str(student.residence_card_start) if student.residence_card_start else None,
+                    "residence_card_expiry": str(student.residence_card_expiry) if student.residence_card_expiry else None,
+                    "visa_year": student.visa_year,
+                    "passport_number": student.passport_number,
+                    "passport_expiration_date": str(student.passport_expiration_date) if student.passport_expiration_date else None,
+                    "visa_application_date": str(student.visa_application_date) if student.visa_application_date else None
+                },
+                new_values={
+                    "residence_card_number": visa_update.residence_card_number,
+                    "residence_card_start": visa_update.residence_card_start,
+                    "residence_card_expiry": visa_update.residence_card_expiry,
+                    "visa_year": visa_update.year,
+                    "passport_number": visa_update.passport_number if hasattr(visa_update, 'passport_number') else student.passport_number,
+                    "passport_expiration_date": visa_update.passport_expiration_date if hasattr(visa_update, 'passport_expiration_date') else student.passport_expiration_date,
+                    "visa_application_date": visa_update.visa_application_date
+                },
+                changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year", "passport_number", "passport_expiration_date", "visa_application_date"],
+                note="비자 정보 업데이트"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {str(log_error)}")
+            # 로그 생성 실패는 학생 수정에 영향을 주지 않도록 함
+    
+    # 응답 데이터 준비
+    response_data = {
+        "id": str(student.id),
+        "name": student.name,
+        "residence_card_number": student.residence_card_number,
+        "residence_card_start": student.residence_card_start,
+        "residence_card_expiry": student.residence_card_expiry,
+        "passport_number": student.passport_number,
+        "passport_expiration_date": student.passport_expiration_date,
+        "visa_application_date": student.visa_application_date,
+        "message": "비자 정보가 성공적으로 업데이트되었습니다."
+    }
+    
+    if residence_card_changed:
+        response_data["history_created"] = True
+        response_data["history_note"] = visa_update.note if visa_update.note else ""
+    
+    return response_data
+
+# 데이터베이스 로그 조회 API
+@app.get("/database-logs")
+def get_database_logs(
+    table_name: Optional[str] = Query(None, description="테이블 이름으로 필터링"),
+    action: Optional[str] = Query(None, description="작업 유형으로 필터링 (CREATE, UPDATE, DELETE)"),
+    user_id: Optional[str] = Query(None, description="사용자 ID로 필터링"),
+    record_id: Optional[str] = Query(None, description="레코드 ID로 필터링"),
+    start_date: Optional[str] = Query(None, description="시작 날짜 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="종료 날짜 (YYYY-MM-DD)"),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """데이터베이스 로그 조회"""
+    # 기본 쿼리 생성
+    query = db.query(DatabaseLog)
+    
+    # 필터링 적용
+    if table_name:
+        query = query.filter(DatabaseLog.table_name.ilike(f"%{table_name}%"))
+    
+    if action:
+        query = query.filter(DatabaseLog.action == action)
+    
+    if user_id:
+        query = query.filter(DatabaseLog.user_id == user_id)
+    
+    if record_id:
+        query = query.filter(DatabaseLog.record_id == record_id)
+    
+    if start_date:
+        try:
+            start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
+            query = query.filter(DatabaseLog.created_at >= start_datetime)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="시작 날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.")
+    
+    if end_date:
+        try:
+            end_datetime = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(DatabaseLog.created_at < end_datetime)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="종료 날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.")
+    
+    # 최신순으로 정렬
+    query = query.order_by(DatabaseLog.created_at.desc())
+    
+    # 전체 항목 수 계산
+    total_count = query.count()
+    
+    # 페이지네이션 적용
+    logs = query.offset((page - 1) * size).limit(size).all()
+    
+    # 전체 페이지 수 계산
+    total_pages = (total_count + size - 1) // size
+    
+    # 응답 데이터 준비
+    result = []
+    for log in logs:
+        log_data = {
+            "id": str(log.id),
+            "table_name": log.table_name,
+            "record_id": log.record_id,
+            "action": log.action,
+            "user_id": log.user_id,
+            "old_values": log.old_values,
+            "new_values": log.new_values,
+            "changed_fields": log.changed_fields,
+            "ip_address": log.ip_address,
+            "user_agent": log.user_agent,
+            "created_at": log.created_at,
+            "note": log.note
+        }
+        result.append(log_data)
+    
+    return {
+        "items": result,
+        "total": total_count,
+        "page": page,
+        "size": size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1
+    }
 
 @app.get("/users")
 def read_users(db: Session = Depends(get_db)):
     return db.query(User).all()
 
 @app.post("/users")
-def create_user(user: dict, db: Session = Depends(get_db)):
+def create_user(
+    user: dict, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     new_user = User(**user)
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return new_user
+    
+    try:
+        db.commit()
+        db.refresh(new_user)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="users",
+            record_id=str(new_user.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "username": new_user.username,
+                "email": new_user.email,
+                "full_name": new_user.full_name,
+                "is_active": new_user.is_active,
+                "is_superuser": new_user.is_superuser
+            },
+            note="사용자 신규 등록"
+        )
+        
+        return new_user
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"사용자 생성 중 오류가 발생했습니다: {str(e)}"
+        )
 
 # 모든 회사 목록 조회
 @app.get("/companies")
@@ -895,12 +1226,42 @@ def search_companies(keyword: str, db: Session = Depends(get_db)):
 
 # 새 회사 생성
 @app.post("/companies")
-def create_company(company: dict, db: Session = Depends(get_db)):
+def create_company(
+    company: dict, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     new_company = Company(**company)
     db.add(new_company)
-    db.commit()
-    db.refresh(new_company)
-    return new_company
+    
+    try:
+        db.commit()
+        db.refresh(new_company)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="companies",
+            record_id=str(new_company.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "name": new_company.name,
+                "address": new_company.address,
+                "phone": new_company.phone,
+                "email": new_company.email,
+                "contact_person": new_company.contact_person
+            },
+            note="회사 신규 등록"
+        )
+        
+        return new_company
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"회사 생성 중 오류가 발생했습니다: {str(e)}"
+        )
 
 # 파일 업로드 엔드포인트
 @app.post("/upload-avatar")
@@ -1012,12 +1373,22 @@ async def upload_student_avatar(
             print(f"file_path: {file_path}")
             print(f"file_content type: {type(file_content)}, size: {len(file_content)}")
             print(f"file content-type: {file.content_type}")
-            result = supabase.storage.from_("avatars").upload(
+            
+            # service role 클라이언트를 사용하여 Storage 업로드
+            result = supabase_storage.storage.from_("avatars").upload(
                 file_path,
                 file_content,
                 {"content-type": file.content_type}
             )
             print(f"Storage upload result: {result}")
+            
+            # 파일 URL 생성 (anon 클라이언트 사용)
+            file_url = supabase.storage.from_("avatars").get_public_url(file_path)
+            
+            # 학생의 avatar 필드 업데이트
+            student.avatar = file_url
+            db.commit()
+            
         except Exception as storage_error:
             print(f"Storage 업로드 에러: {storage_error}")
             raise HTTPException(
@@ -1106,6 +1477,24 @@ async def create_invoice(
         
         db.commit()
         db.refresh(new_invoice)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="invoices",
+            record_id=str(new_invoice.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "student_id": str(new_invoice.student_id),
+                "year": new_invoice.year,
+                "month": new_invoice.month,
+                "total_amount": new_invoice.total_amount,
+                "invoice_number": new_invoice.invoice_number,
+                "status": new_invoice.status
+            },
+            note="청구서 신규 생성"
+        )
         
         return new_invoice
 
@@ -1435,6 +1824,16 @@ async def update_invoice(
             detail="청구서를 찾을 수 없습니다."
         )
 
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "student_id": str(existing_invoice.student_id),
+        "year": existing_invoice.year,
+        "month": existing_invoice.month,
+        "total_amount": existing_invoice.total_amount,
+        "invoice_number": existing_invoice.invoice_number,
+        "status": existing_invoice.status
+    }
+    
     try:
         # 청구서 항목들의 amount 합계 계산
         total_amount = sum(item.amount for item in invoice_update.items)
@@ -1463,6 +1862,26 @@ async def update_invoice(
         
         db.commit()
         db.refresh(existing_invoice)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="invoices",
+            record_id=str(existing_invoice.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            new_values={
+                "student_id": str(existing_invoice.student_id),
+                "year": existing_invoice.year,
+                "month": existing_invoice.month,
+                "total_amount": existing_invoice.total_amount,
+                "invoice_number": existing_invoice.invoice_number,
+                "status": existing_invoice.status
+            },
+            changed_fields=["year", "month", "total_amount"],
+            note="청구서 정보 업데이트"
+        )
         
         return existing_invoice
 
@@ -1568,9 +1987,34 @@ def create_building(
         note=building.note
     )
     db.add(new_building)
-    db.commit()
-    db.refresh(new_building)
-    return new_building
+    
+    try:
+        db.commit()
+        db.refresh(new_building)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="buildings",
+            record_id=str(new_building.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "name": new_building.name,
+                "address": new_building.address,
+                "total_rooms": new_building.total_rooms,
+                "note": new_building.note
+            },
+            note="빌딩 신규 등록"
+        )
+        
+        return new_building
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"빌딩 생성 중 오류가 발생했습니다: {str(e)}"
+        )
 
 @app.put("/buildings/{building_id}", response_model=BuildingResponse)
 def update_building(
@@ -1584,6 +2028,14 @@ def update_building(
     if not building:
         raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
 
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "name": building.name,
+        "address": building.address,
+        "total_rooms": building.total_rooms,
+        "note": building.note
+    }
+    
     # 빌딩 정보 업데이트
     update_data = building_update.dict(exclude_unset=True)
     for field, value in update_data.items():
@@ -1592,6 +2044,25 @@ def update_building(
     try:
         db.commit()
         db.refresh(building)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="buildings",
+            record_id=str(building.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            new_values={
+                "name": building.name,
+                "address": building.address,
+                "total_rooms": building.total_rooms,
+                "note": building.note
+            },
+            changed_fields=list(update_data.keys()),
+            note="빌딩 정보 업데이트"
+        )
+        
         return building
     except Exception as e:
         db.rollback()
@@ -1611,9 +2082,29 @@ def delete_building(
     if not building:
         raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
 
+    # 삭제 전 값 저장 (로그용)
+    old_values = {
+        "name": building.name,
+        "address": building.address,
+        "total_rooms": building.total_rooms,
+        "note": building.note
+    }
+    
     try:
         db.delete(building)
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="buildings",
+            record_id=str(building.id),
+            action="DELETE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            note="빌딩 삭제"
+        )
+        
         return {"message": "빌딩이 성공적으로 삭제되었습니다"}
     except Exception as e:
         db.rollback()
@@ -1708,9 +2199,37 @@ def create_room(
         note=room.note
     )
     db.add(new_room)
-    db.commit()
-    db.refresh(new_room)
-    return new_room
+    
+    try:
+        db.commit()
+        db.refresh(new_room)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="rooms",
+            record_id=str(new_room.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "building_id": str(new_room.building_id),
+                "room_number": new_room.room_number,
+                "rent": new_room.rent,
+                "floor": new_room.floor,
+                "capacity": new_room.capacity,
+                "is_available": new_room.is_available,
+                "note": new_room.note
+            },
+            note="방 신규 등록"
+        )
+        
+        return new_room
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"방 생성 중 오류가 발생했습니다: {str(e)}"
+        )
 
 @app.put("/rooms/{room_id}", response_model=RoomResponse)
 def update_room(
@@ -1739,6 +2258,17 @@ def update_room(
     if room_update.capacity is not None and room_update.capacity <= 0:
         raise HTTPException(status_code=400, detail="정원은 1명 이상이어야 합니다")
 
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "building_id": str(room.building_id),
+        "room_number": room.room_number,
+        "rent": room.rent,
+        "floor": room.floor,
+        "capacity": room.capacity,
+        "is_available": room.is_available,
+        "note": room.note
+    }
+    
     # 방 정보 업데이트
     update_data = room_update.dict(exclude_unset=True)
     for field, value in update_data.items():
@@ -1747,6 +2277,28 @@ def update_room(
     try:
         db.commit()
         db.refresh(room)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="rooms",
+            record_id=str(room.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            new_values={
+                "building_id": str(room.building_id),
+                "room_number": room.room_number,
+                "rent": room.rent,
+                "floor": room.floor,
+                "capacity": room.capacity,
+                "is_available": room.is_available,
+                "note": room.note
+            },
+            changed_fields=list(update_data.keys()),
+            note="방 정보 업데이트"
+        )
+        
         return room
     except Exception as e:
         db.rollback()
@@ -1766,9 +2318,32 @@ def delete_room(
     if not room:
         raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
 
+    # 삭제 전 값 저장 (로그용)
+    old_values = {
+        "building_id": str(room.building_id),
+        "room_number": room.room_number,
+        "rent": room.rent,
+        "floor": room.floor,
+        "capacity": room.capacity,
+        "is_available": room.is_available,
+        "note": room.note
+    }
+    
     try:
         db.delete(room)
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="rooms",
+            record_id=str(room.id),
+            action="DELETE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            note="방 삭제"
+        )
+        
         return {"message": "방이 성공적으로 삭제되었습니다"}
     except Exception as e:
         db.rollback()
@@ -1980,16 +2555,44 @@ def assign_student_to_room(
     if not room.is_available:
         raise HTTPException(status_code=400, detail="해당 방은 현재 사용할 수 없습니다")
 
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "current_room_id": str(student.current_room_id) if student.current_room_id else None
+    }
+    
     # 학생의 방 배정 업데이트
     student.current_room_id = request.room_id
-    db.commit()
-    db.refresh(student)
-
-    return {
-        "message": "학생이 성공적으로 방에 배정되었습니다",
-        "student_id": str(student.id),
-        "room_id": str(request.room_id)
-    }
+    
+    try:
+        db.commit()
+        db.refresh(student)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="students",
+            record_id=str(student.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            new_values={
+                "current_room_id": str(request.room_id) if request.room_id else None
+            },
+            changed_fields=["current_room_id"],
+            note="학생 방 배정" if request.room_id else "학생 방 배정 해제"
+        )
+        
+        return {
+            "message": "학생이 성공적으로 방에 배정되었습니다",
+            "student_id": str(student.id),
+            "room_id": str(request.room_id)
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"방 배정 중 오류가 발생했습니다: {str(e)}"
+        )
 
 @app.post("/rooms/{room_id}/check-in")
 def check_in_student(
@@ -2049,6 +2652,23 @@ def check_in_student(
         db.add(room_log)
         
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="residents",
+            record_id=str(new_resident.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "room_id": str(new_resident.room_id),
+                "student_id": str(new_resident.student_id),
+                "check_in_date": str(new_resident.check_in_date),
+                "is_active": new_resident.is_active,
+                "note": new_resident.note
+            },
+            note="학생 입주"
+        )
         
         return {
             "message": "학생이 성공적으로 입주했습니다",
@@ -2115,6 +2735,33 @@ def check_out_student(
         db.add(room_log)
         
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="residents",
+            record_id=str(resident.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values={
+                "room_id": str(resident.room_id),
+                "student_id": str(resident.student_id),
+                "check_in_date": str(resident.check_in_date),
+                "is_active": True,
+                "check_out_date": None,
+                "note": resident.note
+            },
+            new_values={
+                "room_id": str(resident.room_id),
+                "student_id": str(resident.student_id),
+                "check_in_date": str(resident.check_in_date),
+                "is_active": False,
+                "check_out_date": str(resident.check_out_date),
+                "note": resident.note
+            },
+            changed_fields=["is_active", "check_out_date"],
+            note="학생 퇴실"
+        )
         
         return {
             "message": "학생이 성공적으로 퇴실했습니다",
@@ -2520,6 +3167,33 @@ def change_student_residence(
             
             db.commit()
             
+            # 로그 생성
+            create_database_log(
+                db=db,
+                table_name="residents",
+                record_id=str(current_residence.id),
+                action="UPDATE",
+                user_id=current_user.id if current_user else None,
+                old_values={
+                    "room_id": str(current_residence.room_id),
+                    "student_id": str(current_residence.student_id),
+                    "check_in_date": str(current_residence.check_in_date),
+                    "is_active": True,
+                    "check_out_date": None,
+                    "note": current_residence.note
+                },
+                new_values={
+                    "room_id": str(current_residence.room_id),
+                    "student_id": str(current_residence.student_id),
+                    "check_in_date": str(current_residence.check_in_date),
+                    "is_active": False,
+                    "check_out_date": str(current_residence.check_out_date),
+                    "note": current_residence.note
+                },
+                changed_fields=["is_active", "check_out_date"],
+                note="거주지 변경 - 퇴실"
+            )
+            
             return {
                 "message": "학생이 성공적으로 퇴실했습니다",
                 "student_id": str(student_id),
@@ -2584,6 +3258,50 @@ def change_student_residence(
             db.add(room_log)
             
             db.commit()
+            
+            # 로그 생성 - 기존 거주지 퇴실
+            create_database_log(
+                db=db,
+                table_name="residents",
+                record_id=str(current_residence.id),
+                action="UPDATE",
+                user_id=current_user.id if current_user else None,
+                old_values={
+                    "room_id": str(current_residence.room_id),
+                    "student_id": str(current_residence.student_id),
+                    "check_in_date": str(current_residence.check_in_date),
+                    "is_active": True,
+                    "check_out_date": None,
+                    "note": current_residence.note
+                },
+                new_values={
+                    "room_id": str(current_residence.room_id),
+                    "student_id": str(current_residence.student_id),
+                    "check_in_date": str(current_residence.check_in_date),
+                    "is_active": False,
+                    "check_out_date": str(current_residence.check_out_date),
+                    "note": current_residence.note
+                },
+                changed_fields=["is_active", "check_out_date"],
+                note="거주지 변경 - 기존 방 퇴실"
+            )
+            
+            # 로그 생성 - 새로운 거주지 입주
+            create_database_log(
+                db=db,
+                table_name="residents",
+                record_id=str(new_residence.id),
+                action="CREATE",
+                user_id=current_user.id if current_user else None,
+                new_values={
+                    "room_id": str(new_residence.room_id),
+                    "student_id": str(new_residence.student_id),
+                    "check_in_date": str(new_residence.check_in_date),
+                    "is_active": new_residence.is_active,
+                    "note": new_residence.note
+                },
+                note="거주지 변경 - 새로운 방 입주"
+            )
             
             return {
                 "message": "학생의 거주지가 성공적으로 변경되었습니다",
@@ -2736,6 +3454,24 @@ def create_new_residence(
         db.add(room_log)
         
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="residents",
+            record_id=str(new_residence.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "room_id": str(new_residence.room_id),
+                "student_id": str(new_residence.student_id),
+                "check_in_date": str(new_residence.check_in_date),
+                "check_out_date": str(new_residence.check_out_date) if new_residence.check_out_date else None,
+                "is_active": new_residence.is_active,
+                "note": new_residence.note
+            },
+            note="새로운 거주 기록 추가"
+        )
         
         return {
             "message": "새로운 거주 기록이 성공적으로 추가되었습니다",
@@ -3417,6 +4153,16 @@ def update_charge_item(
     if not charge_item:
         raise HTTPException(status_code=404, detail="청구 항목을 찾을 수 없습니다")
 
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "charge_id": str(charge_item.charge_id),
+        "charge_type": charge_item.charge_type,
+        "amount": float(charge_item.amount) if charge_item.amount else None,
+        "period_start": str(charge_item.period_start) if charge_item.period_start else None,
+        "period_end": str(charge_item.period_end) if charge_item.period_end else None,
+        "memo": charge_item.memo
+    }
+    
     try:
         # 업데이트할 데이터 준비
         update_data = charge_item_update.dict(exclude_unset=True)
@@ -3440,6 +4186,26 @@ def update_charge_item(
 
         db.commit()
         db.refresh(charge_item)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="charge_items",
+            record_id=str(charge_item.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            new_values={
+                "charge_id": str(charge_item.charge_id),
+                "charge_type": charge_item.charge_type,
+                "amount": float(charge_item.amount) if charge_item.amount else None,
+                "period_start": str(charge_item.period_start) if charge_item.period_start else None,
+                "period_end": str(charge_item.period_end) if charge_item.period_end else None,
+                "memo": charge_item.memo
+            },
+            changed_fields=list(update_data.keys()),
+            note="청구 항목 수정"
+        )
 
         return {
             "message": "청구 항목이 성공적으로 수정되었습니다",
@@ -3467,9 +4233,31 @@ def delete_charge_item(
     if not charge_item:
         raise HTTPException(status_code=404, detail="청구 항목을 찾을 수 없습니다")
 
+    # 삭제 전 값 저장 (로그용)
+    old_values = {
+        "charge_id": str(charge_item.charge_id),
+        "charge_type": charge_item.charge_type,
+        "amount": float(charge_item.amount) if charge_item.amount else None,
+        "period_start": str(charge_item.period_start) if charge_item.period_start else None,
+        "period_end": str(charge_item.period_end) if charge_item.period_end else None,
+        "memo": charge_item.memo
+    }
+    
     try:
         db.delete(charge_item)
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="charge_items",
+            record_id=str(charge_item.id),
+            action="DELETE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            note="청구 항목 삭제"
+        )
+        
         return {"message": "청구 항목이 성공적으로 삭제되었습니다"}
 
     except Exception as e:
@@ -3562,6 +4350,27 @@ def create_room_utility(
         db.add(new_utility)
         db.commit()
         db.refresh(new_utility)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="room_utilities",
+            record_id=str(new_utility.id),
+            action="CREATE",
+            user_id=current_user.id if current_user else None,
+            new_values={
+                "room_id": str(new_utility.room_id),
+                "utility_type": new_utility.utility_type,
+                "period_start": str(new_utility.period_start),
+                "period_end": str(new_utility.period_end),
+                "usage": float(new_utility.usage) if new_utility.usage else None,
+                "unit_price": float(new_utility.unit_price) if new_utility.unit_price else None,
+                "total_amount": float(new_utility.total_amount) if new_utility.total_amount else None,
+                "charge_month": str(new_utility.charge_month),
+                "memo": new_utility.memo
+            },
+            note="방 공과금 등록"
+        )
 
         # 응답 데이터 준비
         response_data = {
@@ -3715,6 +4524,19 @@ def update_room_utility(
     if not utility:
         raise HTTPException(status_code=404, detail="공과금을 찾을 수 없습니다")
 
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "room_id": str(utility.room_id),
+        "utility_type": utility.utility_type,
+        "period_start": str(utility.period_start),
+        "period_end": str(utility.period_end),
+        "usage": float(utility.usage) if utility.usage else None,
+        "unit_price": float(utility.unit_price) if utility.unit_price else None,
+        "total_amount": float(utility.total_amount) if utility.total_amount else None,
+        "charge_month": str(utility.charge_month),
+        "memo": utility.memo
+    }
+    
     try:
         # 업데이트할 데이터 준비
         update_data = utility_update.dict(exclude_unset=True)
@@ -3750,6 +4572,29 @@ def update_room_utility(
 
         db.commit()
         db.refresh(utility)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="room_utilities",
+            record_id=str(utility.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            new_values={
+                "room_id": str(utility.room_id),
+                "utility_type": utility.utility_type,
+                "period_start": str(utility.period_start),
+                "period_end": str(utility.period_end),
+                "usage": float(utility.usage) if utility.usage else None,
+                "unit_price": float(utility.unit_price) if utility.unit_price else None,
+                "total_amount": float(utility.total_amount) if utility.total_amount else None,
+                "charge_month": str(utility.charge_month),
+                "memo": utility.memo
+            },
+            changed_fields=list(update_data.keys()),
+            note="방 공과금 수정"
+        )
 
         return {
             "message": "공과금이 성공적으로 수정되었습니다",
@@ -3777,9 +4622,34 @@ def delete_room_utility(
     if not utility:
         raise HTTPException(status_code=404, detail="공과금을 찾을 수 없습니다")
 
+    # 삭제 전 값 저장 (로그용)
+    old_values = {
+        "room_id": str(utility.room_id),
+        "utility_type": utility.utility_type,
+        "period_start": str(utility.period_start),
+        "period_end": str(utility.period_end),
+        "usage": float(utility.usage) if utility.usage else None,
+        "unit_price": float(utility.unit_price) if utility.unit_price else None,
+        "total_amount": float(utility.total_amount) if utility.total_amount else None,
+        "charge_month": str(utility.charge_month),
+        "memo": utility.memo
+    }
+    
     try:
         db.delete(utility)
         db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="room_utilities",
+            record_id=str(utility.id),
+            action="DELETE",
+            user_id=current_user.id if current_user else None,
+            old_values=old_values,
+            note="방 공과금 삭제"
+        )
+        
         return {"message": "공과금이 성공적으로 삭제되었습니다"}
 
     except Exception as e:

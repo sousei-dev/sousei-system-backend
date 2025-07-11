@@ -561,15 +561,14 @@ class ResidenceCardHistoryResponse(BaseModel):
         }
 
 class VisaInfoUpdate(BaseModel):
-    residence_card_number: Optional[str] = Field(None, description="카드 번호")
-    residence_card_start: Optional[Union[date, str]] = Field(None, description="시작일")
-    residence_card_expiry: Optional[Union[date, str]] = Field(None, description="만료일")
-    passport_number: Optional[str] = Field(None, description="여권 번호")
-    passport_expiration_date: Optional[Union[date, str]] = Field(None, description="여권 만료일")
-    visa_application_date: Optional[Union[date, str]] = Field(None, description="비자 신청일")
+    residence_card_number: str = Field(..., description="카드 번호")
+    residence_card_start: Union[date, str] = Field(..., description="시작일")
+    residence_card_expiry: Union[date, str] = Field(..., description="만료일")
+    visa_application_date: Union[date, str] = Field(..., description="비자 신청일")
+    year: str = Field(..., description="갱신년째")
     note: Optional[str] = Field(None, description="비고사항")
 
-    @field_validator('residence_card_start', 'residence_card_expiry', 'passport_expiration_date', 'visa_application_date', mode='before')
+    @field_validator('residence_card_start', 'residence_card_expiry', 'residence_card_number', 'year', mode='before')
     @classmethod
     def validate_date_fields(cls, v):
         if v == "" or v is None:
@@ -579,3 +578,35 @@ class VisaInfoUpdate(BaseModel):
 class AutoAllocationRequest(BaseModel):
     allocation_method: str = Field(..., description="배분 방법 (days_based 또는 usage_based)")
     include_inactive_residents: bool = Field(False, description="퇴실한 학생도 포함할지 여부")
+
+class DatabaseLogCreate(BaseModel):
+    table_name: str = Field(..., description="테이블 이름")
+    record_id: str = Field(..., description="레코드 ID")
+    action: str = Field(..., description="작업 유형 (CREATE, UPDATE, DELETE)")
+    user_id: Optional[str] = Field(None, description="작업한 사용자 ID")
+    old_values: Optional[str] = Field(None, description="변경 전 값 (JSON)")
+    new_values: Optional[str] = Field(None, description="변경 후 값 (JSON)")
+    changed_fields: Optional[str] = Field(None, description="변경된 필드들 (JSON)")
+    ip_address: Optional[str] = Field(None, description="IP 주소")
+    user_agent: Optional[str] = Field(None, description="User Agent")
+    note: Optional[str] = Field(None, description="추가 메모")
+
+class DatabaseLogResponse(BaseModel):
+    id: str
+    table_name: str
+    record_id: str
+    action: str
+    user_id: Optional[str] = None
+    old_values: Optional[str] = None
+    new_values: Optional[str] = None
+    changed_fields: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    created_at: datetime
+    note: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
