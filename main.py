@@ -5436,8 +5436,10 @@ async def download_monthly_invoice(
                 
                 # 퇴실일이 None이면 해당 월 전체 거주로 인식
                 if resident.check_out_date is None:
+                    check_in = max(resident.check_in_date, month_start_date)
                     check_out = month_end_date
                 else:
+                    check_in = resident.check_in_date
                     check_out = min(resident.check_out_date, month_end_date)
 
                 print(f"  체크인: {check_in}, 체크아웃: {check_out}, 원본 체크아웃: {resident.check_out_date}")
