@@ -42,9 +42,6 @@ ACCESS_TOKEN_EXPIRE_DAYS = 7  # 7일로 변경
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")  # anon key 사용 (로그인용)
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")  # service role key 사용 (Storage용)
-print("--SUPABASE_URL:", SUPABASE_URL)
-print("--SUPABASE_ANON_KEY:", SUPABASE_ANON_KEY[:10])  # 앞부분만 찍기
-print("--SUPABASE_SERVICE_KEY:", SUPABASE_SERVICE_KEY[:10] if SUPABASE_SERVICE_KEY else "None")  # 앞부분만 찍기
 
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 # Storage 작업을 위한 service role 클라이언트
@@ -191,7 +188,7 @@ async def login(user: UserLogin):
         session = auth_response.session
         
         return {
-            "message": "로그인 성공",
+            "message": "ログインに成功しました",
             "user_id": user_data.id,
             "email": user_data.email,
             "access_token": session.access_token,
@@ -232,7 +229,7 @@ async def login(user: UserLogin):
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"로그인 중 오류가 발생했습니다: {error_message}"
+                detail=f"ログイン中にエラーが発生しました: {error_message}"
             )
 
 # 로그아웃 엔드포인트
@@ -241,11 +238,11 @@ async def logout():
     try:
         # Supabase Auth 로그아웃
         supabase.auth.sign_out()
-        return {"message": "로그아웃 성공"}
+        return {"message": "ログアウトに成功しました"}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"로그아웃 중 오류가 발생했습니다: {str(e)}"
+            detail=f"ログアウト中にエラーが発生しました: {str(e)}"
         )
 
 # 토큰 갱신 엔드포인트
@@ -256,7 +253,7 @@ async def refresh_token(refresh_token: str):
         auth_response = supabase.auth.refresh_session(refresh_token)
         
         return {
-            "message": "토큰 갱신 성공",
+            "message": "トークン更新に成功しました",
             "access_token": auth_response.session.access_token,
             "refresh_token": auth_response.session.refresh_token,
             "token_type": "bearer"
@@ -284,7 +281,7 @@ async def signup(user: UserCreate):
         user_data = auth_response.user
         
         return {
-            "message": "회원가입 성공",
+            "message": "会員登録に成功しました",
             "user_id": user_data.id,
             "email": user_data.email
         }
@@ -305,7 +302,7 @@ async def signup(user: UserCreate):
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"회원가입 중 오류가 발생했습니다: {error_message}"
+                detail=f"会員登録中にエラーが発生しました: {error_message}"
             )
 
 # 학생 목록 조회 (인증 필요)
@@ -371,7 +368,7 @@ def get_students(
         student_data = {
             "id": str(student.id),
             "name": student.name,
-            "email": student.email,
+            "email": student.email if student.email else "",
             "created_at": student.created_at,
             "company_id": str(student.company_id) if student.company_id else None,
             "consultant": student.consultant,
@@ -430,13 +427,13 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
     ).filter(Student.id == student_id).first()
     
     if student is None:
-        raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다")
+        raise HTTPException(status_code=404, detail="学生が見つかりません")
     
     # 응답 데이터 준비
     student_data = {
         "id": str(student.id),
         "name": student.name,
-        "email": student.email,
+        "email": student.email if student.email else "",
         "created_at": student.created_at,
         "company_id": str(student.company_id) if student.company_id else None,
         "consultant": student.consultant,
@@ -586,7 +583,7 @@ def create_student(
                 start_date=parse_date(student.residence_card_start),
                 expiry_date=parse_date(student.residence_card_expiry),
                 year=student.visa_year,
-                note="신규 등록"
+                note="新規登録"
             )
             db.add(residence_card_history)
 
@@ -647,7 +644,7 @@ def create_student(
                     student_id=new_student.id,
                     action="CHECK_IN",
                     action_date=check_in_date,
-                    note=f"신규 학생 입주 - {clean_value(student.room_note)}" if clean_value(student.room_note) else "신규 학생 입주"
+                    note=f"新規学生入居 - {clean_value(student.room_note)}" if clean_value(student.room_note) else "新規学生入居"
                 )
                 db.add(room_log)
                 print(f"DEBUG: RoomLog 레코드 생성 완료 - id: {room_log.id}")
@@ -702,14 +699,14 @@ def create_student(
                     "residence_card_expiry": str(new_student.residence_card_expiry) if new_student.residence_card_expiry else None,
                     "visa_year": new_student.visa_year
                 },
-                note="학생 신규 등록"
+                note="学生新規登録"
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {str(log_error)}")
             # 로그 생성 실패는 학생 생성에 영향을 주지 않도록 함
 
         return {
-            "message": "학생이 성공적으로 생성되었습니다",
+            "message": "学生が正常に作成されました",
             "student": {
                 "id": str(new_student.id),
                 "name": new_student.name,
@@ -755,15 +752,6 @@ def update_student(
             status_code=404,
             detail="학생을 찾을 수 없습니다."
         )
-
-    # 이메일 중복 검사 (이메일이 변경되는 경우)
-    if student_update.email and student_update.email != student.email:
-        existing_student = db.query(Student).filter(Student.email == student_update.email).first()
-        if existing_student:
-            raise HTTPException(
-                status_code=400,
-                detail="이미 사용 중인 이메일입니다."
-            )
 
     # 회사 존재 여부 확인 (회사가 변경되는 경우)
     if student_update.company_id:
@@ -814,7 +802,7 @@ def update_student(
             start_date=parse_date(student_update.residence_card_start),
             expiry_date=parse_date(student_update.residence_card_expiry),
             year=student_update.visa_year,
-            note="정보 업데이트"
+            note="学生情報更新"
         )
         db.add(residence_card_history)
         print(f"DEBUG: Residence Card 히스토리 생성 완료 (업데이트) - student_id: {student.id}, year: {student_update.visa_year}")
@@ -851,8 +839,8 @@ def update_student(
         student_dict = {
             "id": str(student.id),
             "name": student.name,
-            "email": student.email,
-            "company_id": str(student.company_id),
+            "email": student.email if student.email else "",
+            "company_id": str(student.company_id) if student.company_id else None,
             "consultant": student.consultant,
             "avatar": student.avatar,
             "created_at": student.created_at
@@ -1004,7 +992,7 @@ def update_student_visa_info(
             start_date=start_date,
             expiry_date=parse_date(visa_update.residence_card_expiry),
             year=visa_update.year,
-            note=visa_update.note if visa_update.note else "비자 정보 업데이트"
+            note=visa_update.note if visa_update.note else "ビザ情報更新"
         )
         db.add(residence_card_history)
         print(f"DEBUG: Residence Card 히스토리 생성 완료 (비자 정보 업데이트) - student_id: {student.id}, year: {visa_update.year}")
@@ -1065,7 +1053,7 @@ def update_student_visa_info(
         "passport_number": student.passport_number,
         "passport_expiration_date": student.passport_expiration_date,
         "visa_application_date": student.visa_application_date,
-        "message": "비자 정보가 성공적으로 업데이트되었습니다."
+        "message": "ビザ情報が正常に更新されました。"
     }
     
     if residence_card_changed:
@@ -1191,7 +1179,7 @@ def create_user(
                 "is_active": new_user.is_active,
                 "is_superuser": new_user.is_superuser
             },
-            note="사용자 신규 등록"
+            note="ユーザー新規登録"
         )
         
         return new_user
@@ -1252,7 +1240,7 @@ def create_company(
                 "email": new_company.email,
                 "contact_person": new_company.contact_person
             },
-            note="회사 신규 등록"
+            note="会社新規登録"
         )
         
         return new_company
@@ -1317,7 +1305,7 @@ async def upload_avatar(
         # 파일 URL 가져오기
         file_url = supabase.storage.from_("avatars").get_public_url(file_path)
         return {
-            "message": "프로필 이미지가 성공적으로 업로드되었습니다.",
+            "message": "プロフィール画像が正常にアップロードされました。",
             "avatar_url": file_url
         }
 
@@ -1396,7 +1384,7 @@ async def upload_student_avatar(
                 detail=f"Storage 연결 오류: {str(storage_error)}"
             )
         return {
-            "message": "학생 프로필 이미지가 성공적으로 업로드되었습니다.",
+            "message": "学生のプロフィール画像が正常にアップロードされました。",
             "avatar_url": file_url
         }
 
@@ -1493,7 +1481,7 @@ async def create_invoice(
                 "invoice_number": new_invoice.invoice_number,
                 "status": new_invoice.status
             },
-            note="청구서 신규 생성"
+            note="請求書新規作成"
         )
         
         return new_invoice
@@ -2105,7 +2093,7 @@ def delete_building(
             note="빌딩 삭제"
         )
         
-        return {"message": "빌딩이 성공적으로 삭제되었습니다"}
+        return {"message": "部屋が正常に削除されました"}
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -2511,7 +2499,7 @@ def get_room_residence_history(
                 "name_katakana": resident.student.name_katakana,
                 "nationality": resident.student.nationality,
                 "phone": resident.student.phone,
-                "email": resident.student.email,
+                "email": resident.student.email if resident.student.email else "",
                 "avatar": resident.student.avatar,
                 "gender": resident.student.gender,
                 "birth_date": resident.student.birth_date.strftime("%Y-%m-%d") if resident.student.birth_date else None,
@@ -2583,7 +2571,7 @@ def assign_student_to_room(
         )
         
         return {
-            "message": "학생이 성공적으로 방에 배정되었습니다",
+            "message": "学生が正常に部屋に割り当てられました",
             "student_id": str(student.id),
             "room_id": str(request.room_id)
         }
@@ -3096,7 +3084,7 @@ def get_student_residence_history_monthly(
                     "name_katakana": student.name_katakana,
                     "nationality": student.nationality,
                     "phone": student.phone,
-                    "email": student.email,
+                    "email": student.email if student.email else "",
                     "avatar": student.avatar,
                     "gender": student.gender,
                     "birth_date": student.birth_date.strftime("%Y-%m-%d") if student.birth_date else None,
@@ -3224,15 +3212,15 @@ def change_student_residence(
             if new_room.capacity and current_residents_in_new_room >= new_room.capacity:
                 raise HTTPException(status_code=400, detail="해당 방은 정원이 초과되어 입주할 수 없습니다")
 
-            # 1. 현재 거주지에서 퇴실 처리
-            current_residence.check_out_date = datetime.strptime(request.change_date, "%Y-%m-%d").date()
+            # 1. 현재 거주지에서 퇴실 처리 (이사할 때는 전날에 퇴실)
+            current_residence.check_out_date = datetime.strptime(request.change_date, "%Y-%m-%d").date() - timedelta(days=1)
             current_residence.is_active = False
             if request.note:
                 current_residence.note = f"이사로 인한 퇴실 - {request.note}"
 
             # 2. 새로운 방에 입주 기록 생성
             change_date_obj = datetime.strptime(request.change_date, "%Y-%m-%d").date()
-            check_in_date = change_date_obj + timedelta(days=1)  # 다음날로 설정
+            check_in_date = change_date_obj  # 변경날짜로 설정
             
             new_residence = Resident(
                 id=str(uuid.uuid4()),
@@ -5301,8 +5289,8 @@ def get_student_monthly_utility_allocation(
         "total_amount": round(total_amount, 2)
     }
 
-@app.post("/download-monthly-utilities/{year}/{month}")
-async def download_monthly_utilities(
+@app.get("/buildings/download-monthly-invoice/{year}/{month}")
+async def download_monthly_invoice(
     year: int,
     month: int,
     db: Session = Depends(get_db),
@@ -5352,8 +5340,9 @@ async def download_monthly_utilities(
             RoomUtility.charge_month == target_charge_month
         ).all()
 
-        # 해당 방의 모든 거주자 조회
-        residents = db.query(Resident).options(
+        # 해당 방의 전월 거주자 조회 (야칭계산용)
+        # 전월에 거주했던 사람들 중에서 해당 월에 퇴거하거나 이동하지 않은 사람들
+        prev_month_residents = db.query(Resident).options(
             joinedload(Resident.student)
         ).filter(
             Resident.room_id == room.id,
@@ -5361,11 +5350,25 @@ async def download_monthly_utilities(
             (Resident.check_out_date.is_(None) | (Resident.check_out_date >= start_date))
         ).all()
 
-        if not residents:
+        # 해당 월에 퇴거하거나 이동하지 않은 사람들 (야칭 30,000엔 청구 대상)
+        current_month_residents = db.query(Resident).options(
+            joinedload(Resident.student)
+        ).filter(
+            Resident.room_id == room.id,
+            Resident.check_in_date <= end_date,
+            (Resident.check_out_date.is_(None) | (Resident.check_out_date >= target_charge_month))
+        ).all()
+
+        if not prev_month_residents:
             continue
 
         # 각 공과금별 학생별 배분 계산
         utilities_data = []
+        
+        # 디버깅용 로그 추가
+        print(f"방 {room.room_number}: prev_month_residents 수 = {len(prev_month_residents)}")
+        for resident in prev_month_residents:
+            print(f"  - {resident.student.name}: check_in={resident.check_in_date}, check_out={resident.check_out_date}")
         for utility in utilities:
             # 해당 유틸리티 기간 내 방 거주자 전체 쿼리
             all_residents = db.query(Resident).filter(
@@ -5387,7 +5390,7 @@ async def download_monthly_utilities(
 
             # 각 학생별 부담액 계산
             student_allocations = []
-            for resident in residents:
+            for resident in prev_month_residents:
                 stu_in = max(resident.check_in_date, utility.period_start)
                 stu_out = min(resident.check_out_date or utility.period_end, utility.period_end)
                 days = (stu_out - stu_in).days + 1 if stu_in <= stu_out else 0
@@ -5412,11 +5415,72 @@ async def download_monthly_utilities(
             })
 
         if utilities_data:
+            # 야칭 계산 추가
+            student_rent_data = {}
+            
+            # 해당 월의 총 일수 계산
+            if month == 12:
+                month_end_date = date(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                month_end_date = date(year, month + 1, 1) - timedelta(days=1)
+            
+            month_start_date = date(year, month, 1)
+            total_days_in_month = (month_end_date - month_start_date).days + 1
+            
+            # 각 학생별 야칭 계산
+            for resident in prev_month_residents:
+                student_name = resident.student.name
+                
+                # 해당 월에 거주한 일수 계산
+                check_in = max(resident.check_in_date, month_start_date)
+                
+                # 퇴실일이 None이면 해당 월 전체 거주로 인식
+                if resident.check_out_date is None:
+                    check_out = month_end_date
+                else:
+                    check_out = min(resident.check_out_date, month_end_date)
+
+                print(f"  체크인: {check_in}, 체크아웃: {check_out}, 원본 체크아웃: {resident.check_out_date}")
+                print(f"  원본 체크인: {resident.check_in_date}, 월 시작일: {month_start_date}, 월 종료일: {month_end_date}")
+                
+                # 퇴실일이 없는 경우: 해당 월 전체 거주로 인식
+                if resident.check_out_date is None:
+                    resident_days = total_days_in_month
+                    print(f"  퇴실일 없음: 해당 월 전체 거주로 인식 ({resident_days}일)")
+                else:
+                    # 퇴실일이 있는 경우: 실제 거주일수 계산
+                    resident_days = (check_out - check_in).days + 1 if check_in <= check_out else 0
+                    print(f"  퇴실일 있음: 실제 거주일수 계산 ({resident_days}일)")
+                
+                print(f"  계산: {resident_days}일 (check_out - check_in = {check_out - check_in})")         
+                # 야칭 계산
+                if resident_days >= total_days_in_month:
+                    # 해당 월에 전부 거주: 30,000엔 고정
+                    rent_amount = 30000
+                else:
+                    # 일부만 거주: 거주일수 × 1,000엔
+                    rent_amount = resident_days * 1000
+                
+                student_rent_data[student_name] = {
+                    'days': resident_days,
+                    'rent_amount': rent_amount
+                }
+                print(f"  야칭 계산: {student_name} = {resident_days}일, {rent_amount}엔")
+            
+            # utilities_data에 야칭 정보 추가
+            for utility_data in utilities_data:
+                for allocation in utility_data['student_allocations']:
+                    student_name = allocation['student_name']
+                    if student_name in student_rent_data:
+                        allocation['rent_amount'] = student_rent_data[student_name]['rent_amount']
+                        allocation['rent_days'] = student_rent_data[student_name]['days']
+            
             rooms_data.append({
                 "room_id": str(room.id),
                 "room_number": room.room_number,
                 "building_name": room.building.name if room.building else None,
-                "utilities": utilities_data
+                "utilities": utilities_data,
+                "student_rent_data": student_rent_data
             })
 
     # HTML 템플릿 생성
@@ -5473,20 +5537,48 @@ def generate_utilities_html(rooms_data, year, month, prev_year, prev_month):
                 elif utility['utility_type'] == 'gas':
                     student_totals[student_name]['gas'] = amount
         
-        # 월세 계산 및 추가
-        for student_name in student_totals:
-            # 해당 학생의 거주일수 계산
-            student_days = 0
-            for utility in room['utilities']:
-                for allocation in utility['student_allocations']:
-                    if allocation['student_name'] == student_name:
-                        student_days = max(student_days, allocation['days'])
-                        break
-            
-            # 월세 계산 (거주일수 기준)
-            rent_amount = daily_rent * student_days
-            student_totals[student_name]['rent'] = rent_amount
-            student_totals[student_name]['total'] += rent_amount
+        # 야칭 계산 및 추가
+        # student_rent_data에 있는 모든 학생에 대해 야칭 계산
+        print(f"방 {room['room_number']}: student_rent_data 확인")
+        if 'student_rent_data' in room:
+            print(f"  student_rent_data 키: {list(room['student_rent_data'].keys())}")
+            for student_name, rent_info in room['student_rent_data'].items():
+                print(f"  {student_name}: {rent_info}")
+        else:
+            print("  student_rent_data가 없습니다!")
+        
+        if 'student_rent_data' in room:
+            for student_name, rent_info in room['student_rent_data'].items():
+                # 해당 월의 총 일수 계산
+                if month == 12:
+                    month_end_date = date(year + 1, 1, 1) - timedelta(days=1)
+                else:
+                    month_end_date = date(year, month + 1, 1) - timedelta(days=1)
+                
+                month_start_date = date(year, month, 1)
+                total_days_in_month = (month_end_date - month_start_date).days + 1
+                
+                # 야칭 계산
+                student_rent_days = rent_info['days']
+                if student_rent_days >= total_days_in_month:
+                    # 해당 월에 전부 거주: 30,000엔 고정
+                    rent_amount = 30000
+                else:
+                    # 일부만 거주: 거주일수 × 1,000엔
+                    rent_amount = student_rent_days * 1000
+                
+                # student_totals에 해당 학생이 없으면 추가
+                if student_name not in student_totals:
+                    student_totals[student_name] = {
+                        'rent': 0,        # 월세
+                        'electricity': 0,  # 전기
+                        'water': 0,       # 수도
+                        'gas': 0,         # 가스
+                        'total': 0        # 합계
+                    }
+                
+                student_totals[student_name]['rent'] = rent_amount
+                student_totals[student_name]['total'] += rent_amount
         
         # 방 정보와 학생별 부담금액을 함께 저장
         processed_room = {

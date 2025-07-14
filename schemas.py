@@ -82,7 +82,7 @@ class StudentCreate(BaseModel):
 
 class StudentUpdate(BaseModel):
     name: Optional[str] = None
-    email: Optional[str] = None
+    # email: Optional[str] = None
     company_id: Optional[str] = None
     consultant: Optional[int] = None
     phone: Optional[str] = None
