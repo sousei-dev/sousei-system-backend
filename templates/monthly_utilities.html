@@ -99,6 +99,7 @@
                 <tr class="utility-header">
                     <th>学生名</th>
                     <th>家賃</th>
+                    <th>Wi-Fi</th>
                     <th>電気</th>
                     <th>水道</th>
                     <th>ガス</th>
@@ -109,6 +110,7 @@
                 <tr class="student-row">
                     <td>{{ student_name }}</td>
                     <td>{{ "{:,}".format(amounts.rent | int) }}円</td>
+                    <td>{{ "{:,}".format(amounts.wifi | int) }}円</td>
                     <td>{{ "{:,}".format(amounts.electricity | int) }}円</td>
                     <td>{{ "{:,}".format(amounts.water | int) }}円</td>
                     <td>{{ "{:,}".format(amounts.gas | int) }}円</td>
