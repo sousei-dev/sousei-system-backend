@@ -234,6 +234,8 @@ class RoomCreate(BaseModel):
     building_id: str = Field(..., example="building-uuid")
     room_number: str = Field(..., example="101")
     rent: Optional[int] = Field(None, example=500000)
+    maintenance: Optional[int] = Field(None, example=50000)
+    service: Optional[int] = Field(None, example=50000)
     floor: Optional[int] = Field(None, example=1)
     capacity: Optional[int] = Field(None, example=4)
     is_available: Optional[bool] = Field(True, example=True)
@@ -242,6 +244,8 @@ class RoomCreate(BaseModel):
 class RoomUpdate(BaseModel):
     room_number: Optional[str] = None
     rent: Optional[int] = None
+    maintenance: Optional[int] = None
+    service: Optional[int] = None
     floor: Optional[int] = None
     capacity: Optional[int] = None
     is_available: Optional[bool] = None
@@ -252,6 +256,8 @@ class RoomResponse(BaseModel):
     building_id: str
     room_number: str
     rent: Optional[int] = None
+    maintenance: Optional[int] = None
+    service: Optional[int] = None
     floor: Optional[int] = None
     capacity: Optional[int] = None
     is_available: bool
@@ -309,7 +315,8 @@ class RoomLogResponse(BaseModel):
 class ResidentResponse(BaseModel):
     id: str
     room_id: str
-    student_id: str
+    resident_id: str
+    resident_type: str
     check_in_date: date
     check_out_date: Optional[date] = None
     is_active: bool
@@ -346,6 +353,8 @@ class EmptyRoomOption(BaseModel):
     current_residents: int
     available_spots: Optional[int] = None
     rent: Optional[int] = None
+    maintenance: Optional[int] = None
+    service: Optional[int] = None
     note: Optional[str] = None
 
 # 빌딩 옵션 스키마
@@ -364,6 +373,8 @@ class AvailableRoom(BaseModel):
     current_residents: int
     available_spots: Optional[int] = None
     rent: Optional[int] = None
+    maintenance: Optional[int] = None
+    service: Optional[int] = None
     note: Optional[str] = None
     is_available_for_checkin: bool
     building: dict
@@ -610,3 +621,195 @@ class DatabaseLogResponse(BaseModel):
         json_encoders = {
             UUID: str
         }
+
+class ElderlyCreate(BaseModel):
+    name: str = Field(..., example="田中太郎")
+    email: Optional[str] = Field(None, example="tanaka@example.com")
+    phone: Optional[str] = Field(None, example="090-1234-5678")
+    avatar: Optional[str] = Field(None, example="/src/assets/images/avatars/avatar-1.png")
+    name_katakana: Optional[str] = Field(None, example="タナカタロウ")
+    gender: Optional[str] = Field(None, example="男性")
+    birth_date: Optional[Union[date, str]] = Field(None, example="1940-01-01")
+    status: Optional[str] = Field("ACTIVE", example="ACTIVE")
+    current_room_id: Optional[Union[UUID, str]] = Field(None, example="room-uuid")
+    care_level: Optional[str] = Field(None, example="要介護1")
+
+    @field_validator('current_room_id', mode='before')
+    @classmethod
+    def validate_uuid_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator('birth_date', mode='before')
+    @classmethod
+    def validate_date_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator('name_katakana', 'phone', 'gender', 'care_level', mode='before')
+    @classmethod
+    def validate_string_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+class ElderlyUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar: Optional[str] = None
+    name_katakana: Optional[str] = None
+    gender: Optional[str] = None
+    birth_date: Optional[date] = None
+    status: Optional[str] = None
+    current_room_id: Optional[UUID] = None
+    care_level: Optional[str] = None
+
+class ElderlyResponse(BaseModel):
+    id: str
+    name: str
+    email: Optional[str] = None
+    created_at: datetime
+    phone: Optional[str] = None
+    avatar: Optional[str] = None
+    name_katakana: Optional[str] = None
+    gender: Optional[str] = None
+    birth_date: Optional[date] = None
+    status: Optional[str] = None
+    current_room_id: Optional[str] = None
+    care_level: Optional[str] = None
+    current_room: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str  # UUID를 문자열로 변환
+        }
+
+class ElderlyContractCreate(BaseModel):
+    elderly_id: str = Field(..., description="고령자 ID")
+    room_id: Optional[str] = Field(None, description="방 ID")
+    base_rent: int = Field(..., description="기본 임대료")
+    common_fee: Optional[int] = Field(0, description="공용부과금")
+    service_fee: Optional[int] = Field(0, description="서비스 요금")
+    deposit: Optional[int] = Field(0, description="보증금")
+    contract_start: Union[date, str] = Field(..., description="계약 시작일")
+    contract_end: Optional[Union[date, str]] = Field(None, description="계약 종료일")
+
+    @field_validator('contract_start', 'contract_end', mode='before')
+    @classmethod
+    def validate_date_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+class ElderlyContractUpdate(BaseModel):
+    room_id: Optional[str] = None
+    base_rent: Optional[int] = None
+    common_fee: Optional[int] = None
+    service_fee: Optional[int] = None
+    deposit: Optional[int] = None
+    contract_start: Optional[date] = None
+    contract_end: Optional[date] = None
+
+class ElderlyContractResponse(BaseModel):
+    id: str
+    elderly_id: Optional[str] = None
+    room_id: Optional[str] = None
+    base_rent: int
+    common_fee: Optional[int] = None
+    service_fee: Optional[int] = None
+    deposit: Optional[int] = None
+    contract_start: date
+    contract_end: Optional[date] = None
+    created_at: datetime
+    elderly: Optional[dict] = None
+    room: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class ElderlyInvoiceItemCreate(BaseModel):
+    elderly_invoice_id: str = Field(..., description="고령자 청구서 ID")
+    name: str = Field(..., description="항목명")
+    usage_quantity: Optional[float] = Field(None, description="사용량")
+    amount: int = Field(..., description="금액")
+    sort_order: Optional[int] = Field(0, description="정렬 순서")
+    memo: Optional[str] = Field(None, description="메모")
+
+class ElderlyInvoiceItemUpdate(BaseModel):
+    name: Optional[str] = None
+    usage_quantity: Optional[float] = None
+    amount: Optional[int] = None
+    sort_order: Optional[int] = None
+    memo: Optional[str] = None
+
+class ElderlyInvoiceItemResponse(BaseModel):
+    id: str
+    elderly_invoice_id: str
+    name: str
+    usage_quantity: Optional[float] = None
+    amount: int
+    sort_order: Optional[int] = None
+    memo: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class ElderlyInvoiceCreate(BaseModel):
+    elderly_contract_id: str = Field(..., description="고령자 계약 ID")
+    invoice_date: Union[date, str] = Field(..., description="청구서 날짜")
+    due_date: Optional[Union[date, str]] = Field(None, description="납부 기한")
+    total_amount: Optional[int] = Field(None, description="총 금액")
+    status: Optional[str] = Field("unpaid", description="상태")
+
+    @field_validator('invoice_date', 'due_date', mode='before')
+    @classmethod
+    def validate_date_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+class ElderlyInvoiceUpdate(BaseModel):
+    invoice_date: Optional[date] = None
+    due_date: Optional[date] = None
+    total_amount: Optional[int] = None
+    status: Optional[str] = None
+
+class ElderlyInvoiceResponse(BaseModel):
+    id: str
+    elderly_contract_id: Optional[str] = None
+    invoice_date: date
+    due_date: Optional[date] = None
+    total_amount: Optional[int] = None
+    status: Optional[str] = None
+    created_at: datetime
+    elderly_contract: Optional[dict] = None
+    items: Optional[List[ElderlyInvoiceItemResponse]] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class CareItemResponse(BaseModel):
+    id: int
+    name: str
+    category: Optional[str] = None
+    default_price: Optional[int] = None
+    unit: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = True
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

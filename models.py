@@ -146,6 +146,7 @@ class Building(Base):
     address = Column(String)
     total_rooms = Column(Integer)
     note = Column(String)
+    resident_type = Column(String)
 
     # 관계 설정
     rooms = relationship("Room", back_populates="building", cascade="all, delete-orphan")
@@ -157,9 +158,12 @@ class Room(Base):
     building_id = Column(UUID(as_uuid=True), ForeignKey("buildings.id", ondelete="CASCADE"), nullable=False)
     room_number = Column(String, nullable=False)
     rent = Column(Integer)
+    maintenance = Column(Integer)
+    service = Column(Integer)
     floor = Column(Integer)
     capacity = Column(Integer)
     is_available = Column(Boolean, default=True)
+    security_deposit = Column(Integer)
     note = Column(String)
 
     # 관계 설정
@@ -172,7 +176,8 @@ class Resident(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    resident_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    resident_type = Column(Text, nullable=True)  # 거주자 유형 (예: 'student', 'guest', 'family' 등)
     check_in_date = Column(Date, nullable=False)
     check_out_date = Column(Date)
     is_active = Column(Boolean, default=True)
@@ -182,10 +187,10 @@ class Resident(Base):
 
     # 관계 설정
     room = relationship("Room", back_populates="residents")
-    student = relationship("Student", back_populates="residences")
+    student = relationship("Student", back_populates="residences", foreign_keys=[resident_id])
 
     __table_args__ = (
-        UniqueConstraint('room_id', 'student_id', 'is_active', name='unique_active_resident_per_room'),
+        UniqueConstraint('room_id', 'resident_id', 'is_active', name='unique_active_resident_per_room'),
     )
 
 class RoomLog(Base):
@@ -316,3 +321,103 @@ class DatabaseLog(Base):
 
     # 인덱스 추가 (파티셔닝은 나중에 필요시 추가)
     __table_args__ = ()
+
+class Elderly(Base):
+    __tablename__ = "elderly"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String)
+    email = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    phone = Column(String)
+    avatar = Column(String, default="/src/assets/images/avatars/avatar-1.png")
+    name_katakana = Column(String)
+    gender = Column(String)
+    birth_date = Column(Date)
+    status = Column(String, default='ACTIVE')
+    current_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"))
+    care_level = Column(String)
+    categories_id = Column(Integer, ForeignKey("elderly_categories.id"), nullable=True)
+    note = Column(String)
+
+    # 관계 설정
+    current_room = relationship("Room", foreign_keys=[current_room_id])
+    category = relationship("ElderlyCategories", foreign_keys=[categories_id])
+
+
+class ElderlyCategories(Base):
+    __tablename__ = "elderly_categories"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    category = Column(String, nullable=False)
+    label = Column(String)
+
+class BuildingCategoriesRent(Base):
+    __tablename__ = "building_categories_rents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    building_id = Column(UUID(as_uuid=True), ForeignKey("buildings.id", ondelete="CASCADE"), nullable=False)
+    categories_id = Column(Integer, ForeignKey("elderly_categories.id"), nullable=False)
+    monthly_rent = Column(Integer, nullable=False)
+
+    # 관계 설정
+    building = relationship("Building", foreign_keys=[building_id])
+
+class ElderlyContract(Base):
+    __tablename__ = "elderly_contracts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    elderly_id = Column(UUID(as_uuid=True), ForeignKey("elderly.id", ondelete="CASCADE"), nullable=True)
+    room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True)
+    rent = Column(Integer, nullable=False)
+    maintenance = Column(Integer, default=0)
+    service = Column(Integer, default=0)
+    deposit = Column(Integer, default=0)
+    contract_start = Column(Date, nullable=False)
+    contract_end = Column(Date, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계 설정
+    elderly = relationship("Elderly", foreign_keys=[elderly_id])
+    room = relationship("Room", foreign_keys=[room_id])
+
+class ElderlyInvoiceItem(Base):
+    __tablename__ = "elderly_invoices_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    elderly_invoice_id = Column(UUID(as_uuid=True), ForeignKey("elderly_invoices.id", ondelete="CASCADE"), nullable=True)
+    name = Column(Text, nullable=False)
+    usage_quantity = Column(Numeric, nullable=True)
+    amount = Column(Integer, nullable=False)
+    sort_order = Column(Integer, default=0)
+    memo = Column(Text, nullable=True)
+
+    # 관계 설정
+    elderly_invoice = relationship("ElderlyInvoice", back_populates="items", foreign_keys=[elderly_invoice_id])
+
+class ElderlyInvoice(Base):
+    __tablename__ = "elderly_invoices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    elderly_contract_id = Column(UUID(as_uuid=True), ForeignKey("elderly_contracts.id", ondelete="CASCADE"), nullable=True)
+    invoice_date = Column(Date, nullable=False)
+    due_date = Column(Date, nullable=True)
+    total_amount = Column(Integer, nullable=True)
+    status = Column(String, default='unpaid')
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계 설정
+    elderly_contract = relationship("ElderlyContract", foreign_keys=[elderly_contract_id])
+    items = relationship("ElderlyInvoiceItem", back_populates="elderly_invoice", cascade="all, delete-orphan")
+
+class CareItem(Base):
+    __tablename__ = "care_items"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(Text, nullable=False)
+    category = Column(Text, nullable=True)
+    default_price = Column(Integer, nullable=True)
+    unit = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

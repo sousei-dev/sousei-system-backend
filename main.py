@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
-from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog
-from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate
+from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem
+from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareItemResponse
 import uuid
 import json
 from uuid import UUID
@@ -1891,6 +1891,7 @@ async def update_invoice(
 def get_buildings(
     name: Optional[str] = Query(None, description="빌딩 이름으로 검색"),
     address: Optional[str] = Query(None, description="주소로 검색"),
+    resident_type: Optional[str] = Query(None, description="거주자 타입으로 검색"),
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     db: Session = Depends(get_db),
@@ -1904,7 +1905,8 @@ def get_buildings(
         query = query.filter(Building.name.ilike(f"%{name}%"))
     if address:
         query = query.filter(Building.address.ilike(f"%{address}%"))
-
+    if resident_type:
+        query = query.filter(Building.resident_type == resident_type)
     # 전체 항목 수 계산
     total_count = query.count()
 
@@ -2125,6 +2127,9 @@ def get_rooms_by_building(
     if is_available is not None:
         query = query.filter(Room.is_available == is_available)
 
+    # room_number 기준으로 정렬 (숫자 정렬을 위해 CAST 사용)
+    query = query.order_by(Room.room_number)
+
     # 전체 항목 수 계산
     total_count = query.count()
 
@@ -2134,8 +2139,37 @@ def get_rooms_by_building(
     # 전체 페이지 수 계산
     total_pages = (total_count + size - 1) // size
 
+    # 방 정보와 함께 BuildingCategoriesRent 정보 포함
+    room_data = []
+    for room in rooms:
+        room_dict = {
+            "id": str(room.id),
+            "building_id": str(room.building_id),
+            "room_number": room.room_number,
+            "rent": room.rent,
+            "maintenance": room.maintenance,
+            "service": room.service,
+            "floor": room.floor,
+            "capacity": room.capacity,
+            "is_available": room.is_available,
+            "note": room.note,
+            "security_deposit": room.security_deposit,
+            "monthly_rent": None
+        }
+        
+        # 해당 빌딩의 BuildingCategoriesRent 정보 조회
+        building_status_rent = db.query(BuildingCategoriesRent).filter(
+            BuildingCategoriesRent.building_id == room.building_id,
+            BuildingCategoriesRent.status_type_id == 1
+        ).first()
+        
+        if building_status_rent:
+            room_dict["monthly_rent"] = building_status_rent.monthly_rent
+        
+        room_data.append(room_dict)
+
     return {
-        "items": rooms,
+        "items": room_data,
         "total": total_count,
         "total_pages": total_pages,
         "current_page": page
@@ -2147,10 +2181,36 @@ def get_room(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    room = db.query(Room).filter(Room.id == room_id).first()
+    room = db.query(Room).options(
+        joinedload(Room.building)
+    ).filter(Room.id == room_id).first()
+    
     if not room:
         raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
-    return room
+    
+    # 방 정보와 함께 빌딩의 resident_type 포함
+    room_data = {
+        "id": str(room.id),
+        "building_id": str(room.building_id),
+        "room_number": room.room_number,
+        "rent": room.rent,
+        "maintenance": room.maintenance,
+        "service": room.service,
+        "floor": room.floor,
+        "capacity": room.capacity,
+        "is_available": room.is_available,
+        "note": room.note,
+        "building": {
+            "id": str(room.building.id),
+            "name": room.building.name,
+            "address": room.building.address,
+            "total_rooms": room.building.total_rooms,
+            "note": room.building.note,
+            "resident_type": room.building.resident_type
+        }
+    }
+    
+    return room_data
 
 @app.post("/rooms", response_model=RoomResponse)
 def create_room(
@@ -2377,7 +2437,7 @@ def get_room_residents(
     for student in residents:
         # 해당 학생의 입주 정보 가져오기
         resident_info = db.query(Resident).filter(
-            Resident.student_id == student.id,
+            Resident.resident_id == student.id,
             Resident.room_id == room_id,
             Resident.is_active == True
         ).first()
@@ -2385,7 +2445,8 @@ def get_room_residents(
         resident_data = {
             "id": str(resident_info.id),
             "room_id": str(resident_info.room_id),
-            "student_id": str(resident_info.student_id),
+            "resident_id": str(resident_info.resident_id),
+            "resident_type": resident_info.resident_type,
             "check_in_date": resident_info.check_in_date.strftime("%Y-%m-%d"),
             "check_out_date": resident_info.check_out_date.strftime("%Y-%m-%d") if resident_info.check_out_date else None,
             "is_active": resident_info.is_active,
@@ -2481,7 +2542,7 @@ def get_room_residence_history(
         resident_data = {
             "id": str(resident.id),
             "room_id": str(resident.room_id),
-            "student_id": str(resident.student_id),
+            "student_id": str(resident.resident_id),
             "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
             "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
             "is_active": resident.is_active,
@@ -2605,7 +2666,7 @@ def check_in_student(
 
     # 이미 해당 방에 입주 중인지 확인
     existing_resident = db.query(Resident).filter(
-        Resident.student_id == request.student_id,
+        Resident.resident_id == request.student_id,
         Resident.room_id == room_id,
         Resident.is_active == True,
         Resident.check_out_date.is_(None)
@@ -2650,7 +2711,7 @@ def check_in_student(
             user_id=current_user.id if current_user else None,
             new_values={
                 "room_id": str(new_resident.room_id),
-                "student_id": str(new_resident.student_id),
+                "student_id": str(new_resident.resident_id),
                 "check_in_date": str(new_resident.check_in_date),
                 "is_active": new_resident.is_active,
                 "note": new_resident.note
@@ -2691,7 +2752,7 @@ def check_out_student(
 
     # 해당 방에 입주 중인지 확인
     resident = db.query(Resident).filter(
-        Resident.student_id == request.student_id,
+        Resident.resident_id == request.student_id,
         Resident.room_id == room_id,
         Resident.is_active == True,
         Resident.check_out_date.is_(None)
@@ -2733,7 +2794,7 @@ def check_out_student(
             user_id=current_user.id if current_user else None,
             old_values={
                 "room_id": str(resident.room_id),
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "check_in_date": str(resident.check_in_date),
                 "is_active": True,
                 "check_out_date": None,
@@ -2741,7 +2802,7 @@ def check_out_student(
             },
             new_values={
                 "room_id": str(resident.room_id),
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "check_in_date": str(resident.check_in_date),
                 "is_active": False,
                 "check_out_date": str(resident.check_out_date),
@@ -2933,7 +2994,7 @@ def get_student_residence_history(
     # 해당 학생의 모든 거주 기록 조회
     query = db.query(Resident).options(
         joinedload(Resident.room).joinedload(Room.building)
-    ).filter(Resident.student_id == student_id)
+    ).filter(Resident.resident_id == student_id)
 
     # 활성 상태 필터링 (선택사항)
     if is_active is not None:
@@ -2954,7 +3015,7 @@ def get_student_residence_history(
         resident_data = {
             "id": str(resident.id),
             "room_id": str(resident.room_id),
-            "student_id": str(resident.student_id),
+            "student_id": str(resident.resident_id),
             "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
             "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
             "is_active": resident.is_active,
@@ -3032,7 +3093,7 @@ def get_student_residence_history_monthly(
     residents = db.query(Resident).options(
         joinedload(Resident.room).joinedload(Room.building)
     ).filter(
-        Resident.student_id == student_id,
+        Resident.resident_id == student_id,
         # 입주일이 해당 월에 있거나
         (Resident.check_in_date <= end_date) &
         # 퇴실일이 없거나(현재 거주 중) 퇴실일이 해당 월 이후이거나
@@ -3059,7 +3120,7 @@ def get_student_residence_history_monthly(
             resident_data = {
                 "id": str(resident.id),
                 "room_id": str(resident.room_id),
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
                 "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
                 "is_active": resident.is_active,
@@ -3120,7 +3181,7 @@ def change_student_residence(
 
     # 현재 거주 중인 방 확인
     current_residence = db.query(Resident).filter(
-        Resident.student_id == student_id,
+        Resident.resident_id == student_id,
         Resident.is_active == True,
         Resident.check_out_date.is_(None)
     ).first()
@@ -4756,7 +4817,7 @@ def get_residents_during_utility_period(
                 estimated_amount = 0
 
             resident_info = {
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "student_name": resident.student.name,
                 "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
                 "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
@@ -4846,7 +4907,7 @@ def calculate_utility_allocation(
             amount = float(utility.total_amount) * ratio if utility.total_amount else 0
 
             allocation = {
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "student_name": resident.student.name,
                 "days_used": overlap_days,
                 "ratio": round(ratio * 100, 2),
@@ -4868,7 +4929,7 @@ def calculate_utility_allocation(
             amount = float(utility.total_amount) * ratio if utility.total_amount else 0
 
             allocation = {
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "student_name": resident.student.name,
                 "days_used": overlap_days,
                 "ratio": round(ratio * 100, 2),
@@ -5002,7 +5063,7 @@ def get_monthly_utility_allocation(
             amount = float(utility.total_amount) * ratio if utility.total_amount else 0
 
             allocation = {
-                "student_id": str(resident.student_id),
+                "student_id": str(resident.resident_id),
                 "student_name": resident.student.name,
                 "days_used": overlap_days,
                 "ratio": round(ratio * 100, 2),
@@ -5212,7 +5273,7 @@ def get_student_monthly_utility_allocation(
     # 4. 학생의 해당 방에 대한 거주 이력 (입주~퇴실)
     resident = db.query(Resident).filter(
         Resident.room_id == room_id,
-        Resident.student_id == student_id,
+        Resident.resident_id == student_id,
         Resident.check_in_date <= end_date,
         (Resident.check_out_date.is_(None) | (Resident.check_out_date >= start_date))
     ).first()
@@ -5862,3 +5923,115 @@ def validate_monthly_invoice(
         "month": month,
         "download_url": f"/buildings/download-monthly-invoice/{year}/{month}" if can_download else None
     }
+
+@app.get("/elderly")
+def get_elderly(
+    name: Optional[str] = Query(None, description="고령자 이름으로 검색"),
+    name_katakana: Optional[str] = Query(None, description="고령자 이름 카타카나로 검색"),
+    gender: Optional[str] = Query(None, description="성별로 검색"),
+    care_level: Optional[str] = Query(None, description="요양 등급으로 검색"),
+    status: Optional[str] = Query(None, description="상태로 검색"),
+    building_name: Optional[str] = Query(None, description="건물 이름으로 검색"),
+    room_number: Optional[str] = Query(None, description="방 번호로 검색"),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    고령자 목록을 조회합니다.
+    """
+    # 기본 쿼리 생성
+    query = db.query(Elderly).options(joinedload(Elderly.current_room).joinedload(Room.building),joinedload(Elderly.category))
+    
+    # 검색 조건 적용
+    if name:
+        query = query.filter(Elderly.name.ilike(f"%{name}%"))
+    
+    if name_katakana:
+        query = query.filter(Elderly.name_katakana.ilike(f"%{name_katakana}%"))
+    
+    if gender:
+        query = query.filter(Elderly.gender == gender)
+    
+    if care_level:
+        query = query.filter(Elderly.care_level == care_level)
+    
+    if status:
+        query = query.filter(Elderly.status == status)
+    
+    if building_name:
+        query = query.join(Room, Elderly.current_room_id == Room.id).join(Building, Room.building_id == Building.id)
+        query = query.filter(Building.name.ilike(f"%{building_name}%"))
+    
+    if room_number:
+        query = query.join(Room, Elderly.current_room_id == Room.id)
+        query = query.filter(Room.room_number.ilike(f"%{room_number}%"))
+    
+    # 생성일 기준 내림차순 정렬
+    query = query.order_by(Elderly.created_at.desc())
+    
+    # 전체 개수 계산
+    total_count = query.count()
+    
+    # 페이지네이션 적용
+    offset = (page - 1) * page_size
+    elderly_list = query.offset(offset).limit(page_size).all()
+    
+    # 응답 데이터 구성
+    elderly_data = []
+    for elderly in elderly_list:
+        elderly_dict = {
+            "id": str(elderly.id),
+            "name": elderly.name,
+            "email": elderly.email,
+            "created_at": elderly.created_at,
+            "phone": elderly.phone,
+            "avatar": elderly.avatar,
+            "name_katakana": elderly.name_katakana,
+            "gender": elderly.gender,
+            "birth_date": elderly.birth_date,
+            "status": elderly.status,
+            "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
+            "care_level": elderly.care_level,
+            "current_room": None
+        }
+        
+        # 현재 방 정보 추가
+        if elderly.current_room:
+            elderly_dict["current_room"] = {
+                "id": str(elderly.current_room.id),
+                "room_number": elderly.current_room.room_number,
+                "floor": elderly.current_room.floor,
+                "capacity": elderly.current_room.capacity,
+                "rent": elderly.current_room.rent,
+                "maintenance": elderly.current_room.maintenance,
+                "service": elderly.current_room.service,
+                "note": elderly.current_room.note,
+                "building": {
+                    "id": str(elderly.current_room.building.id),
+                    "name": elderly.current_room.building.name,
+                    "address": elderly.current_room.building.address,
+                    "resident_type": elderly.current_room.building.resident_type
+                } if elderly.current_room.building else None
+            }
+        
+        elderly_data.append(elderly_dict)
+    
+    return {
+        "items": elderly_data,
+        "total": total_count,
+        "total_pages": (total_count + page_size - 1) // page_size
+    }
+
+@app.get("/care-items", response_model=List[CareItemResponse])
+def get_care_items(
+    is_active: Optional[bool] = Query(None, description="활성화 여부로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(CareItem)
+    if is_active is not None:
+        query = query.filter(CareItem.is_active == is_active)
+    items = query.order_by(CareItem.created_at.desc()).all()
+    return items
