@@ -416,8 +416,29 @@ class CareItem(Base):
     id = Column(Integer, primary_key=True)
     name = Column(Text, nullable=False)
     category = Column(Text, nullable=True)
-    default_price = Column(Integer, nullable=True)
+    price = Column(Integer, nullable=True)
     unit = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CareMealPrice(Base):
+    __tablename__ = "care_meal_prices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    meal_type = Column(Text, nullable=False)  # 'breakfast', 'lunch', 'dinner'
+    price = Column(Integer, nullable=False)    # 1회 식사 단가
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CareUtilityPrice(Base):
+    __tablename__ = "care_utility_prices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    utility_type = Column(Text, nullable=False)  # 'electricity', 'water', 'gas'
+    price_per_unit = Column(Integer, nullable=False)  # 단위당 요금
+    unit = Column(Text, nullable=False)  # 단위 (예: kWh, m3)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

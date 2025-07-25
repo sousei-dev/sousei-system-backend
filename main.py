@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
-from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem
-from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareItemResponse
+from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem, CareMealPrice, CareUtilityPrice
+from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse
 import uuid
 import json
 from uuid import UUID
@@ -49,6 +49,7 @@ supabase_storage = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY) if SUPABASE
 
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
+
 
 # CORS 설정
 origins = [
@@ -317,6 +318,7 @@ def get_students(
     student_type: Optional[str] = Query(None, description="학생 유형으로 검색"),
     building_name: Optional[str] = Query(None, description="건물 이름으로 검색"),
     room_number: Optional[str] = Query(None, description="방 번호로 검색"),
+    status: Optional[str] = Query(None, description="상태로 검색"),
     page: int = Query(1, description="페이지 번호", ge=1),  # 1 이상의 정수
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),  # 1~100 사이의 정수
     db: Session = Depends(get_db),
@@ -352,6 +354,8 @@ def get_students(
         query = query.filter(Building.name.ilike(f"%{building_name}%"))
     if room_number:
         query = query.filter(Room.room_number.ilike(f"%{room_number}%"))
+    if status:
+        query = query.filter(Student.status == status)
 
     # 전체 항목 수 계산
     total_count = query.count()
@@ -812,29 +816,28 @@ def update_student(
         db.refresh(student)
         
         # 로그 생성 (변경된 경우에만)
-        if residence_card_changed:
-            create_database_log(
-                db=db,
-                table_name="students",
-                record_id=str(student.id),
-                action="UPDATE",
-                user_id=current_user.id if current_user else None,
-                old_values={
-                    "residence_card_number": student.residence_card_number,
-                    "residence_card_start": str(student.residence_card_start) if student.residence_card_start else None,
-                    "residence_card_expiry": str(student.residence_card_expiry) if student.residence_card_expiry else None,
-                    "visa_year": student.visa_year
-                },
-                new_values={
-                    "residence_card_number": student_update.residence_card_number,
-                    "residence_card_start": student_update.residence_card_start,
-                    "residence_card_expiry": student_update.residence_card_expiry,
-                    "visa_year": student_update.visa_year
-                },
-                changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year"],
-                note="학생 정보 업데이트"
-            )
-        
+        create_database_log(
+            db=db,
+            table_name="students",
+            record_id=str(student.id),
+            action="UPDATE",
+            user_id=current_user.id if current_user else None,
+            old_values={
+                "residence_card_number": student.residence_card_number,
+                "residence_card_start": str(student.residence_card_start) if student.residence_card_start else None,
+                "residence_card_expiry": str(student.residence_card_expiry) if student.residence_card_expiry else None,
+                "visa_year": student.visa_year
+            },
+            new_values={
+                "residence_card_number": student_update.residence_card_number,
+                "residence_card_start": student_update.residence_card_start,
+                "residence_card_expiry": student_update.residence_card_expiry,
+                "visa_year": student_update.visa_year
+            },
+            changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year"],
+            note="学生情報更新"
+        )
+      
         # UUID를 문자열로 변환
         student_dict = {
             "id": str(student.id),
@@ -1037,7 +1040,7 @@ def update_student_visa_info(
                     "visa_application_date": visa_update.visa_application_date
                 },
                 changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year", "passport_number", "passport_expiration_date", "visa_application_date"],
-                note="비자 정보 업데이트"
+                note="ビザ情報更新"
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {str(log_error)}")
@@ -1868,7 +1871,7 @@ async def update_invoice(
                 "status": existing_invoice.status
             },
             changed_fields=["year", "month", "total_amount"],
-            note="청구서 정보 업데이트"
+            note="請求書情報更新"
         )
         
         return existing_invoice
@@ -1995,7 +1998,7 @@ def create_building(
                 "total_rooms": new_building.total_rooms,
                 "note": new_building.note
             },
-            note="빌딩 신규 등록"
+            note="ビル新規登録"
         )
         
         return new_building
@@ -2050,7 +2053,7 @@ def update_building(
                 "note": building.note
             },
             changed_fields=list(update_data.keys()),
-            note="빌딩 정보 업데이트"
+            note="ビル情報更新"
         )
         
         return building
@@ -2092,7 +2095,7 @@ def delete_building(
             action="DELETE",
             user_id=current_user.id if current_user else None,
             old_values=old_values,
-            note="빌딩 삭제"
+            note="ビル削除"
         )
         
         return {"message": "部屋が正常に削除されました"}
@@ -2160,7 +2163,7 @@ def get_rooms_by_building(
         # 해당 빌딩의 BuildingCategoriesRent 정보 조회
         building_status_rent = db.query(BuildingCategoriesRent).filter(
             BuildingCategoriesRent.building_id == room.building_id,
-            BuildingCategoriesRent.status_type_id == 1
+            BuildingCategoriesRent.categories_id == 1
         ).first()
         
         if building_status_rent:
@@ -2268,7 +2271,7 @@ def create_room(
                 "is_available": new_room.is_available,
                 "note": new_room.note
             },
-            note="방 신규 등록"
+            note="部屋新規登録"
         )
         
         return new_room
@@ -2344,7 +2347,7 @@ def update_room(
                 "note": room.note
             },
             changed_fields=list(update_data.keys()),
-            note="방 정보 업데이트"
+            note="部屋情報更新"
         )
         
         return room
@@ -2389,10 +2392,10 @@ def delete_room(
             action="DELETE",
             user_id=current_user.id if current_user else None,
             old_values=old_values,
-            note="방 삭제"
+            note="部屋削除"
         )
         
-        return {"message": "방이 성공적으로 삭제되었습니다"}
+        return {"message": "部屋が正常に削除されました"}
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -2593,7 +2596,7 @@ def assign_student_to_room(
     if request.room_id is None:
         student.current_room_id = None
         db.commit()
-        return {"message": "학생의 방 배정이 해제되었습니다"}
+        return {"message": "学生の部屋割り当てが解除されました"}
 
     # 방 존재 여부 확인
     room = db.query(Room).filter(Room.id == request.room_id).first()
@@ -2628,7 +2631,7 @@ def assign_student_to_room(
                 "current_room_id": str(request.room_id) if request.room_id else None
             },
             changed_fields=["current_room_id"],
-            note="학생 방 배정" if request.room_id else "학생 방 배정 해제"
+            note="学生部屋割り当て" if request.room_id else "学生部屋割り当て解除"
         )
         
         return {
@@ -2696,7 +2699,7 @@ def check_in_student(
             student_id=request.student_id,
             action="CHECK_IN",
             action_date=datetime.strptime(request.check_in_date, "%Y-%m-%d").date(),
-            note=f"입주 - {request.note}" if request.note else "입주"
+            note=f"入居 - {request.note}" if request.note else "入居"
         )
         db.add(room_log)
         
@@ -2716,11 +2719,11 @@ def check_in_student(
                 "is_active": new_resident.is_active,
                 "note": new_resident.note
             },
-            note="학생 입주"
+            note="学生入居"
         )
         
         return {
-            "message": "학생이 성공적으로 입주했습니다",
+            "message": "学生が正常に入居しました",
             "student_id": str(request.student_id),
             "room_id": str(room_id),
             "check_in_date": request.check_in_date
@@ -2779,7 +2782,7 @@ def check_out_student(
             student_id=request.student_id,
             action="CHECK_OUT",
             action_date=datetime.strptime(request.check_out_date, "%Y-%m-%d").date(),
-            note=f"퇴실 - {request.note}" if request.note else "퇴실"
+            note=f"退去 - {request.note}" if request.note else "退去"
         )
         db.add(room_log)
         
@@ -2809,11 +2812,11 @@ def check_out_student(
                 "note": resident.note
             },
             changed_fields=["is_active", "check_out_date"],
-            note="학생 퇴실"
+            note="学生退去"
         )
         
         return {
-            "message": "학생이 성공적으로 퇴실했습니다",
+            "message": "学生が正常に退去しました",
             "student_id": str(request.student_id),
             "room_id": str(room_id),
             "check_out_date": request.check_out_date
@@ -3240,7 +3243,7 @@ def change_student_residence(
                     "note": current_residence.note
                 },
                 changed_fields=["is_active", "check_out_date"],
-                note="거주지 변경 - 퇴실"
+                note="居住地変更 - 退去"
             )
             
             return {
@@ -3332,7 +3335,7 @@ def change_student_residence(
                     "note": current_residence.note
                 },
                 changed_fields=["is_active", "check_out_date"],
-                note="거주지 변경 - 기존 방 퇴실"
+                note="居住地変更 - 既存部屋退去"
             )
             
             # 로그 생성 - 새로운 거주지 입주
@@ -3349,11 +3352,11 @@ def change_student_residence(
                     "is_active": new_residence.is_active,
                     "note": new_residence.note
                 },
-                note="거주지 변경 - 새로운 방 입주"
+                note="居住地変更 - 新部屋入居"
             )
             
             return {
-                "message": "학생의 거주지가 성공적으로 변경되었습니다",
+                "message": "学生の居住地が正常に変更されました",
                 "student_id": str(student_id),
                 "old_room_id": str(current_residence.room_id),
                 "new_room_id": str(request.new_room_id),
@@ -3524,11 +3527,11 @@ def create_new_residence(
                 "is_active": new_residence.is_active,
                 "note": new_residence.note
             },
-            note="새로운 거주 기록 추가"
+            note="新居住記録追加"
         )
         
         return {
-            "message": "새로운 거주 기록이 성공적으로 추가되었습니다",
+            "message": "新居住記録が正常に追加されました",
             "student_id": str(student_id),
             "room_id": str(request.new_room_id),
             "check_in_date": request.change_date,
@@ -3708,7 +3711,7 @@ def create_charge_item_allocation(
         db.refresh(new_allocation)
 
         return {
-            "message": "청구 항목 배분이 성공적으로 등록되었습니다",
+            "message": "請求項目配分が正常に登録されました",
             "id": str(new_allocation.id),
             "charge_item_id": str(charge_item_id),
             "student_id": str(allocation.student_id),
@@ -3802,7 +3805,7 @@ def update_charge_item_allocation(
         db.refresh(allocation)
 
         return {
-            "message": "청구 항목 배분이 성공적으로 수정되었습니다",
+            "message": "請求項目配分が正常に修正されました",
             "id": str(allocation.id),
             "amount": float(allocation.amount),
             "days_used": allocation.days_used,
@@ -3836,7 +3839,7 @@ def delete_charge_item_allocation(
     try:
         db.delete(allocation)
         db.commit()
-        return {"message": "청구 항목 배분이 성공적으로 삭제되었습니다"}
+        return {"message": "請求項目配分が正常に削除されました"}
 
     except Exception as e:
         db.rollback()
@@ -4098,7 +4101,7 @@ def update_room_charge(
         db.refresh(charge)
 
         return {
-            "message": "광열비가 성공적으로 수정되었습니다",
+            "message": "光熱費が正常に修正されました",
             "id": str(charge.id),
             "total_amount": float(charge.total_amount) if charge.total_amount else None,
             "note": charge.note
@@ -4126,7 +4129,7 @@ def delete_room_charge(
     try:
         db.delete(charge)
         db.commit()
-        return {"message": "광열비가 성공적으로 삭제되었습니다"}
+        return {"message": "光熱費が正常に削除されました"}
 
     except Exception as e:
         db.rollback()
@@ -4181,7 +4184,7 @@ def create_charge_item(
         db.refresh(new_charge_item)
 
         return {
-            "message": "청구 항목이 성공적으로 추가되었습니다",
+            "message": "請求項目が正常に追加されました",
             "id": str(new_charge_item.id),
             "charge_type": new_charge_item.charge_type,
             "amount": float(new_charge_item.amount) if new_charge_item.amount else None
@@ -4258,11 +4261,11 @@ def update_charge_item(
                 "memo": charge_item.memo
             },
             changed_fields=list(update_data.keys()),
-            note="청구 항목 수정"
+            note="請求項目修正"
         )
 
         return {
-            "message": "청구 항목이 성공적으로 수정되었습니다",
+            "message": "請求項目が正常に修正されました",
             "id": str(charge_item.id),
             "charge_type": charge_item.charge_type,
             "amount": float(charge_item.amount) if charge_item.amount else None
@@ -4309,10 +4312,10 @@ def delete_charge_item(
             action="DELETE",
             user_id=current_user.id if current_user else None,
             old_values=old_values,
-            note="청구 항목 삭제"
+            note="請求項目削除"
         )
         
-        return {"message": "청구 항목이 성공적으로 삭제되었습니다"}
+        return {"message": "請求項目が正常に削除されました"}
 
     except Exception as e:
         db.rollback()
@@ -4423,7 +4426,7 @@ def create_room_utility(
                 "charge_month": str(new_utility.charge_month),
                 "memo": new_utility.memo
             },
-            note="방 공과금 등록"
+            note="部屋光熱費登録"
         )
 
         # 응답 데이터 준비
@@ -4647,11 +4650,11 @@ def update_room_utility(
                 "memo": utility.memo
             },
             changed_fields=list(update_data.keys()),
-            note="방 공과금 수정"
+            note="部屋光熱費修正"
         )
 
         return {
-            "message": "공과금이 성공적으로 수정되었습니다",
+            "message": "光熱費が正常に修正されました",
             "id": str(utility.id),
             "utility_type": utility.utility_type,
             "total_amount": float(utility.total_amount) if utility.total_amount else None
@@ -4664,17 +4667,27 @@ def update_room_utility(
             detail=f"공과금 수정 중 오류가 발생했습니다: {str(e)}"
         )
 
-@app.delete("/room-utilities/{utility_id}")
-def delete_room_utility(
+@app.delete("/rooms/{room_id}/utilities/{utility_id}")
+def delete_room_utility_by_room(
+    room_id: str,
     utility_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """방 공과금 삭제"""
-    # 공과금 존재 여부 확인
-    utility = db.query(RoomUtility).filter(RoomUtility.id == utility_id).first()
+    """특정 방의 공과금 삭제"""
+    # 방 존재 여부 확인
+    room = db.query(Room).filter(Room.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
+
+    # 공과금 존재 여부 및 해당 방의 공과금인지 확인
+    utility = db.query(RoomUtility).filter(
+        RoomUtility.id == utility_id,
+        RoomUtility.room_id == room_id
+    ).first()
+    
     if not utility:
-        raise HTTPException(status_code=404, detail="공과금을 찾을 수 없습니다")
+        raise HTTPException(status_code=404, detail="해당 방의 공과금을 찾을 수 없습니다")
 
     # 삭제 전 값 저장 (로그용)
     old_values = {
@@ -4701,10 +4714,10 @@ def delete_room_utility(
             action="DELETE",
             user_id=current_user.id if current_user else None,
             old_values=old_values,
-            note="방 공과금 삭제"
+            note="部屋光熱費削除"
         )
         
-        return {"message": "공과금이 성공적으로 삭제되었습니다"}
+        return {"message": "光熱費が正常に削除されました"}
 
     except Exception as e:
         db.rollback()
@@ -5753,7 +5766,7 @@ def validate_monthly_utilities(
     if not rooms_with_residents:
         return {
             "is_valid": False,
-            "message": f"{year}년 {month}월에 거주자가 있는 방이 없습니다.",
+            "message": f"{year}年{month}月に居住者がいる部屋がありません。",
             "missing_rooms": [],
             "total_rooms": 0,
             "valid_rooms": 0,
@@ -5802,7 +5815,7 @@ def validate_monthly_utilities(
     
     return {
         "is_valid": is_valid,
-        "message": f"{year}년 {month}월 공과금 입력 상태: {'완료' if is_valid else '미완료'}",
+        "message": f"{year}年{month}月光熱費入力状態: {'完了' if is_valid else '未完了'}",
         "missing_rooms": missing_rooms,
         "valid_rooms": valid_rooms,
         "total_rooms": len(rooms_with_residents),
@@ -5846,7 +5859,7 @@ def validate_monthly_invoice(
         return {
             "is_valid": False,
             "can_download": False,
-            "message": f"{year}년 {month}월에 거주자가 있는 방이 없습니다.",
+            "message": f"{year}年{month}月に居住者がいる部屋がありません。",
             "missing_rooms": [],
             "total_rooms": 0,
             "valid_rooms": 0,
@@ -5894,9 +5907,9 @@ def validate_monthly_invoice(
             "total_residents": len(residents),
             "resident_names": resident_names,
             "missing_utility_names": {
-                "electricity": "전기" if "electricity" in missing_utility_types else None,
-                "water": "수도" if "water" in missing_utility_types else None,
-                "gas": "가스" if "gas" in missing_utility_types else None
+                "electricity": "電気" if "electricity" in missing_utility_types else None,
+                "water": "水道" if "water" in missing_utility_types else None,
+                "gas": "ガス" if "gas" in missing_utility_types else None
             }
         }
 
@@ -5912,7 +5925,7 @@ def validate_monthly_invoice(
     return {
         "is_valid": is_valid,
         "can_download": can_download,
-        "message": f"{year}년 {month}월 공과금 입력 상태: {'완료' if is_valid else '미완료'}",
+        "message": f"{year}年{month}月光熱費入力状態: {'完了' if is_valid else '未完了'}",
         "missing_rooms": missing_rooms,
         "valid_rooms": valid_rooms,
         "total_rooms": len(rooms_with_residents),
@@ -6035,3 +6048,208 @@ def get_care_items(
         query = query.filter(CareItem.is_active == is_active)
     items = query.order_by(CareItem.created_at.desc()).all()
     return items
+
+
+@app.get("/care-meal-prices", response_model=List[CareMealPriceResponse])
+def get_care_meal_prices(
+    meal_type: Optional[str] = Query(None, description="식사 유형으로 필터링 (breakfast, lunch, dinner)"),
+    is_active: Optional[bool] = Query(None, description="활성화 여부로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 식사 가격 목록을 조회합니다.
+    """
+    query = db.query(CareMealPrice)
+    
+    if meal_type:
+        query = query.filter(CareMealPrice.meal_type == meal_type)
+    
+    if is_active is not None:
+        query = query.filter(CareMealPrice.is_active == is_active)
+    
+    items = query.order_by(CareMealPrice.created_at.desc()).all()
+    return items
+
+
+@app.post("/care-meal-prices", response_model=CareMealPriceResponse)
+def create_care_meal_price(
+    meal_price: CareMealPriceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 식사 가격을 생성합니다.
+    """
+    # 동일한 meal_type이 이미 존재하는지 확인
+    existing_price = db.query(CareMealPrice).filter(
+        CareMealPrice.meal_type == meal_price.meal_type,
+        CareMealPrice.is_active == True
+    ).first()
+    
+    if existing_price:
+        raise HTTPException(
+            status_code=400,
+            detail=f"이미 활성화된 {meal_price.meal_type} 식사 가격이 존재합니다."
+        )
+    
+    db_meal_price = CareMealPrice(
+        meal_type=meal_price.meal_type,
+        price=meal_price.price,
+        is_active=meal_price.is_active
+    )
+    
+    db.add(db_meal_price)
+    db.commit()
+    db.refresh(db_meal_price)
+    
+    return db_meal_price
+
+
+@app.put("/care-meal-prices/{price_id}", response_model=CareMealPriceResponse)
+def update_care_meal_price(
+    price_id: str,
+    meal_price_update: CareMealPriceUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 식사 가격을 수정합니다.
+    """
+    db_meal_price = db.query(CareMealPrice).filter(CareMealPrice.id == price_id).first()
+    
+    if not db_meal_price:
+        raise HTTPException(status_code=404, detail="케어 식사 가격을 찾을 수 없습니다.")
+    
+    update_data = meal_price_update.dict(exclude_unset=True)
+    
+    for field, value in update_data.items():
+        setattr(db_meal_price, field, value)
+    
+    db.commit()
+    db.refresh(db_meal_price)
+    
+    return db_meal_price
+
+
+@app.delete("/care-meal-prices/{price_id}")
+def delete_care_meal_price(
+    price_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 식사 가격을 삭제합니다.
+    """
+    db_meal_price = db.query(CareMealPrice).filter(CareMealPrice.id == price_id).first()
+    
+    if not db_meal_price:
+        raise HTTPException(status_code=404, detail="케어 식사 가격을 찾을 수 없습니다.")
+    
+    db.delete(db_meal_price)
+    db.commit()
+    
+    return {"message": "케어 식사 가격이 성공적으로 삭제되었습니다."}
+
+
+@app.get("/care-utility-prices", response_model=List[CareUtilityPriceResponse])
+def get_care_utility_prices(
+    utility_type: Optional[str] = Query(None, description="공과금 유형으로 필터링 (electricity, water, gas)"),
+    is_active: Optional[bool] = Query(None, description="활성화 여부로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 공과금 가격 목록을 조회합니다.
+    """
+    query = db.query(CareUtilityPrice)
+    
+    if utility_type:
+        query = query.filter(CareUtilityPrice.utility_type == utility_type)
+    
+    if is_active is not None:
+        query = query.filter(CareUtilityPrice.is_active == is_active)
+    
+    items = query.order_by(CareUtilityPrice.created_at.desc()).all()
+    return items
+
+
+@app.post("/care-utility-prices", response_model=CareUtilityPriceResponse)
+def create_care_utility_price(
+    utility_price: CareUtilityPriceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 공과금 가격을 생성합니다.
+    """
+    # 동일한 utility_type이 이미 존재하는지 확인
+    existing_price = db.query(CareUtilityPrice).filter(
+        CareUtilityPrice.utility_type == utility_price.utility_type,
+        CareUtilityPrice.is_active == True
+    ).first()
+    
+    if existing_price:
+        raise HTTPException(
+            status_code=400,
+            detail=f"이미 활성화된 {utility_price.utility_type} 공과금 가격이 존재합니다."
+        )
+    
+    db_utility_price = CareUtilityPrice(
+        utility_type=utility_price.utility_type,
+        price_per_unit=utility_price.price_per_unit,
+        unit=utility_price.unit,
+        is_active=utility_price.is_active
+    )
+    
+    db.add(db_utility_price)
+    db.commit()
+    db.refresh(db_utility_price)
+    
+    return db_utility_price
+
+
+@app.put("/care-utility-prices/{price_id}", response_model=CareUtilityPriceResponse)
+def update_care_utility_price(
+    price_id: str,
+    utility_price_update: CareUtilityPriceUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 공과금 가격을 수정합니다.
+    """
+    db_utility_price = db.query(CareUtilityPrice).filter(CareUtilityPrice.id == price_id).first()
+    
+    if not db_utility_price:
+        raise HTTPException(status_code=404, detail="케어 공과금 가격을 찾을 수 없습니다.")
+    
+    update_data = utility_price_update.dict(exclude_unset=True)
+    
+    for field, value in update_data.items():
+        setattr(db_utility_price, field, value)
+    
+    db.commit()
+    db.refresh(db_utility_price)
+    
+    return db_utility_price
+
+
+@app.delete("/care-utility-prices/{price_id}")
+def delete_care_utility_price(
+    price_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    케어 공과금 가격을 삭제합니다.
+    """
+    db_utility_price = db.query(CareUtilityPrice).filter(CareUtilityPrice.id == price_id).first()
+    
+    if not db_utility_price:
+        raise HTTPException(status_code=404, detail="케어 공과금 가격을 찾을 수 없습니다.")
+    
+    db.delete(db_utility_price)
+    db.commit()
+    
+    return {"message": "케어 공과금 가격이 성공적으로 삭제되었습니다."} 

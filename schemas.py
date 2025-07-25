@@ -252,8 +252,8 @@ class RoomUpdate(BaseModel):
     note: Optional[str] = None
 
 class RoomResponse(BaseModel):
-    id: str
-    building_id: str
+    id: Optional[Union[UUID, str]] = None
+    building_id: Optional[Union[UUID, str]] = None
     room_number: str
     rent: Optional[int] = None
     maintenance: Optional[int] = None
@@ -805,7 +805,7 @@ class CareItemResponse(BaseModel):
     id: int
     name: str
     category: Optional[str] = None
-    default_price: Optional[int] = None
+    price: Optional[int] = None
     unit: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = True
@@ -813,3 +813,58 @@ class CareItemResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CareMealPriceCreate(BaseModel):
+    meal_type: str = Field(..., description="식사 유형 (breakfast, lunch, dinner)")
+    price: int = Field(..., description="1회 식사 단가")
+    is_active: Optional[bool] = Field(True, description="활성화 여부")
+
+
+class CareMealPriceUpdate(BaseModel):
+    meal_type: Optional[str] = Field(None, description="식사 유형")
+    price: Optional[int] = Field(None, description="1회 식사 단가")
+    is_active: Optional[bool] = Field(None, description="활성화 여부")
+
+
+class CareMealPriceResponse(BaseModel):
+    id: str
+    meal_type: str
+    price: int
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+
+class CareUtilityPriceCreate(BaseModel):
+    utility_type: str = Field(..., description="공과금 유형 (electricity, water, gas)")
+    price_per_unit: int = Field(..., description="단위당 요금")
+    unit: str = Field(..., description="단위 (예: kWh, m3)")
+    is_active: Optional[bool] = Field(True, description="활성화 여부")
+
+
+class CareUtilityPriceUpdate(BaseModel):
+    utility_type: Optional[str] = Field(None, description="공과금 유형")
+    price_per_unit: Optional[int] = Field(None, description="단위당 요금")
+    unit: Optional[str] = Field(None, description="단위")
+    is_active: Optional[bool] = Field(None, description="활성화 여부")
+
+
+class CareUtilityPriceResponse(BaseModel):
+    id: str
+    utility_type: str
+    price_per_unit: int
+    unit: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
