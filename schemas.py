@@ -210,6 +210,7 @@ class BuildingCreate(BaseModel):
     address: Optional[str] = Field(None, example="大阪府大阪市東住吉区矢田3-7-9")
     total_rooms: Optional[int] = Field(None, example=50)
     note: Optional[str] = Field(None, example="メモ")
+    building_type: Optional[str] = Field(None, example="mansion")
 
 class BuildingUpdate(BaseModel):
     name: Optional[str] = None
@@ -218,11 +219,11 @@ class BuildingUpdate(BaseModel):
     note: Optional[str] = None
 
 class BuildingResponse(BaseModel):
-    id: str
     name: str
     address: Optional[str] = None
     total_rooms: Optional[int] = None
     note: Optional[str] = None
+    building_type: Optional[str] = None
 
     class Config:
         from_attributes = True

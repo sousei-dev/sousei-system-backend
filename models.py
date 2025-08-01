@@ -15,6 +15,7 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     password = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
+    role = Column(String, default="manager")
 
 class Student(Base):
     __tablename__ = "students"
@@ -147,6 +148,7 @@ class Building(Base):
     total_rooms = Column(Integer)
     note = Column(String)
     resident_type = Column(String)
+    building_type = Column(String)
 
     # 관계 설정
     rooms = relationship("Room", back_populates="building", cascade="all, delete-orphan")
@@ -201,6 +203,7 @@ class RoomLog(Base):
     student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=True)
     action = Column(String, nullable=False)  # CHECK_IN, CHECK_OUT, MOVE, HISTORICAL_ENTRY
     action_date = Column(Date, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
     note = Column(Text, nullable=True)
 
     # 관계 설정
