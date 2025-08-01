@@ -869,3 +869,30 @@ class CareUtilityPriceResponse(BaseModel):
         json_encoders = {
             UUID: str
         }
+
+# Monthly Items 스키마
+class BillingMonthlyItemCreate(BaseModel):
+    student_id: str = Field(..., description="학생 ID")
+    item_name: str = Field(..., description="항목 이름")
+    memo: Optional[str] = Field(None, description="메모")
+
+class BillingMonthlyItemUpdate(BaseModel):
+    amount: Optional[float] = Field(None, description="금액")
+    memo: Optional[str] = Field(None, description="메모")
+
+class BillingMonthlyItemResponse(BaseModel):
+    id: str
+    student_id: str
+    year: int
+    month: int
+    item_name: str
+    amount: float
+    memo: Optional[str] = None
+    sort_order: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }

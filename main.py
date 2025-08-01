@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
-from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem, CareMealPrice, CareUtilityPrice
-from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse
+from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem, CareMealPrice, CareUtilityPrice, BillingMonthlyItem
+from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse, BillingMonthlyItemCreate, BillingMonthlyItemUpdate, BillingMonthlyItemResponse
 import uuid
 import json
 from uuid import UUID
@@ -3358,9 +3358,9 @@ def change_student_residence(
             current_residence.check_out_date = datetime.strptime(request.change_date, "%Y-%m-%d").date()
             current_residence.is_active = False
             if request.note:
-                current_residence.note = f"퇴실 - {request.note}"
+                current_residence.note = f"退去 - {request.note}"
             else:
-                current_residence.note = "퇴실"
+                current_residence.note = "退去"
 
             # 학생의 current_room_id 초기화
             student.current_room_id = None
@@ -3372,7 +3372,7 @@ def change_student_residence(
                 student_id=student_id,
                 action="CHECK_OUT",
                 action_date=datetime.strptime(request.change_date, "%Y-%m-%d").date(),
-                note=f"퇴실 - {request.note}" if request.note else "퇴실"
+                note=f"退去 - {request.note}" if request.note else "退去"
             )
             db.add(room_log)
             
@@ -5258,8 +5258,8 @@ def get_monthly_invoice_preview_by_students(
 
             # 야칭 계산
             print(f"[DEBUG] {student.name} - check_in_date: {resident_info.check_in_date}, check_out_date: {resident_info.check_out_date}")
-            # 퇴실일이 있고 check_in_date가 퇴실일과 같은 달이 아니라면 퇴실일 달 기준으로 계산
-            # 퇴실일이 없으면 check_in_date의 월을 검색으로 보낸 month로 기준
+            
+            # 퇴실일이 있는 경우와 없는 경우를 구분하여 계산
             if resident_info.check_out_date is not None:
                 # 퇴실일이 있는 경우
                 check_in_month = resident_info.check_in_date.month
@@ -5273,22 +5273,19 @@ def get_monthly_invoice_preview_by_students(
                     rent_amount = days_in_month * 1000
                     print(f"[DEBUG] {student.name} - 퇴실일 달 기준 계산: {days_in_month}일 × 1,000 = {rent_amount}엔")
                 else:
-                    # 같은 달인 경우 기존 로직
-                    if resident_info.check_in_date.day != 1:
-                        rent_amount = days_in_month * 1000
-                        print(f"[DEBUG] {student.name} - 같은 달, 입주일이 1일 아님: {days_in_month}일 × 1,000 = {rent_amount}엔")
-                    else:
-                        rent_amount = 30000
-                        print(f"[DEBUG] {student.name} - 같은 달, 입주일이 1일: 30,000엔")
+                    # 같은 달인 경우 - 퇴실일이 있으면 항상 일별 계산
+                    rent_amount = days_in_month * 1000
+                    print(f"[DEBUG] {student.name} - 같은 달, 퇴실일 있음: {days_in_month}일 × 1,000 = {rent_amount}엔")
             else:
                 # 퇴실일이 없는 경우
-                # 실제 거주 일수로 계산 (입주일이 1일이 아닌 경우)
-                if resident_info.check_in_date.day != 1:
-                    rent_amount = days_in_month * 1000
-                    print(f"[DEBUG] {student.name} - 퇴실일 없음, 입주일이 1일 아님: {days_in_month}일 × 1,000 = {rent_amount}엔")
-                else:
+                # 입주일이 1일이고 해당 월 전체를 거주하는 경우만 30,000엔
+                if resident_info.check_in_date.day == 1 and days_in_month >= 30:
                     rent_amount = 30000
-                    print(f"[DEBUG] {student.name} - 퇴실일 없음, 입주일이 1일: 30,000엔")
+                    print(f"[DEBUG] {student.name} - 퇴실일 없음, 1일 입주, 전체 월 거주: 30,000엔")
+                else:
+                    # 그 외의 경우는 일별 계산
+                    rent_amount = days_in_month * 1000
+                    print(f"[DEBUG] {student.name} - 퇴실일 없음, 일별 계산: {days_in_month}일 × 1,000 = {rent_amount}엔")
 
             # 와이파이 비용 계산
             if resident_info.check_out_date is not None:
@@ -5304,22 +5301,19 @@ def get_monthly_invoice_preview_by_students(
                     wifi_amount = int(days_in_month * (700 / 30))
                     print(f"[DEBUG] {student.name} - 와이파이 퇴실일 달 기준 계산: {days_in_month}일 × (700/30) = {wifi_amount}엔")
                 else:
-                    # 같은 달인 경우 기존 로직
-                    if resident_info.check_in_date.day != 1:
-                        wifi_amount = int(days_in_month * (700 / 30))
-                        print(f"[DEBUG] {student.name} - 와이파이 같은 달, 입주일이 1일 아님: {days_in_month}일 × (700/30) = {wifi_amount}엔")
-                    else:
-                        wifi_amount = 700
-                        print(f"[DEBUG] {student.name} - 와이파이 같은 달, 입주일이 1일: 700엔")
+                    # 같은 달인 경우 - 퇴실일이 있으면 항상 일별 계산
+                    wifi_amount = int(days_in_month * (700 / 30))
+                    print(f"[DEBUG] {student.name} - 와이파이 같은 달, 퇴실일 있음: {days_in_month}일 × (700/30) = {wifi_amount}엔")
             else:
                 # 퇴실일이 없는 경우
-                # 실제 거주 일수로 계산 (입주일이 1일이 아닌 경우)
-                if resident_info.check_in_date.day != 1:
-                    wifi_amount = int(days_in_month * (700 / 30))
-                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 입주일이 1일 아님: {days_in_month}일 × (700/30) = {wifi_amount}엔")
-                else:
+                # 입주일이 1일이고 해당 월 전체를 거주하는 경우만 700엔 고정
+                if resident_info.check_in_date.day == 1 and days_in_month >= 30:
                     wifi_amount = 700
-                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 입주일이 1일: 700엔")
+                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 1일 입주, 전체 월 거주: 700엔")
+                else:
+                    # 그 외의 경우는 일별 계산
+                    wifi_amount = int(days_in_month * (700 / 30))
+                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 일별 계산: {days_in_month}일 × (700/30) = {wifi_amount}엔")
 
             # 3. 공과금 조회 및 계산
             utilities_data = []
@@ -7311,3 +7305,227 @@ def test_get_students(
             "status": status
         }
     }
+
+
+# Monthly Items API
+@app.get("/students/{student_id}/monthly-items")
+def get_student_monthly_items(
+    student_id: str,
+    year: Optional[int] = Query(None, description="년도로 필터링"),
+    month: Optional[int] = Query(None, description="월로 필터링 (1-12)"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """학생의 월별 관리비 항목 조회"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다.")
+        
+        # 기본 쿼리 생성
+        query = db.query(BillingMonthlyItem).filter(BillingMonthlyItem.student_id == student_id)
+        
+        # 필터링
+        if year is not None:
+            query = query.filter(BillingMonthlyItem.year == year)
+        if month is not None:
+            query = query.filter(BillingMonthlyItem.month == month)
+        
+        # 정렬 (년도, 월, 정렬 순서)
+        items = query.order_by(BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).all()
+        
+        # 항목 이름별로 그룹화
+        grouped_items = {}
+        for item in items:
+            if item.item_name not in grouped_items:
+                grouped_items[item.item_name] = {
+                    "item_name": item.item_name,
+                    "memo": item.memo,
+                    "months": {}
+                }
+            
+            # 1~12월 데이터 초기화 (없는 월은 0으로 설정)
+            if len(grouped_items[item.item_name]["months"]) == 0:
+                for m in range(1, 13):
+                    grouped_items[item.item_name]["months"][m] = {
+                        "month": m,
+                        "amount": 0,
+                        "memo": None,
+                        "item_id": None
+                    }
+            
+            # 실제 데이터로 업데이트
+            grouped_items[item.item_name]["months"][item.month] = {
+                "month": item.month,
+                "amount": float(item.amount),
+                "memo": item.memo,
+                "item_id": str(item.id)
+            }
+        
+        # 그룹화된 데이터를 리스트로 변환
+        result_items = []
+        for item_name, item_data in grouped_items.items():
+            months_list = []
+            for month_num in range(1, 13):
+                months_list.append(item_data["months"][month_num])
+            
+            result_items.append({
+                "item_name": item_name,
+                "memo": item_data["memo"],
+                "months": months_list
+            })
+        
+        return {
+            "student_id": student_id,
+            "student_name": student.name,
+            "items": result_items
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"월별 관리비 항목 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.post("/students/{student_id}/monthly-items")
+def create_student_monthly_items(
+    student_id: str,
+    item_data: BillingMonthlyItemCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """학생의 월별 관리비 항목 생성 (0~12월 전체 생성)"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다.")
+        
+        # 기존 항목이 있는지 확인
+        existing_items = db.query(BillingMonthlyItem).filter(
+            BillingMonthlyItem.student_id == student_id,
+            BillingMonthlyItem.item_name == item_data.item_name
+        ).first()
+        
+        if existing_items:
+            raise HTTPException(status_code=400, detail="이미 존재하는 항목명입니다.")
+        
+        # 1~12월까지 항목 생성
+        items_to_create = []
+        for month in range(1, 13):  # 1~12월
+            new_item = BillingMonthlyItem(
+                student_id=student_id,
+                year=datetime.now().year,
+                month=month,
+                item_name=item_data.item_name,
+                amount=0,
+                memo=item_data.memo,
+                sort_order=0
+            )
+            items_to_create.append(new_item)
+        
+        # 데이터베이스에 일괄 삽입
+        db.add_all(items_to_create)
+        db.commit()
+        
+        return {
+            "message": "월별 관리비 항목이 성공적으로 생성되었습니다.",
+            "created_items": len(items_to_create),
+            "student_id": student_id,
+            "item_name": item_data.item_name
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"월별 관리비 항목 생성 중 오류가 발생했습니다: {str(e)}")
+
+@app.put("/monthly-items/{item_id}")
+def update_monthly_item(
+    item_id: str,
+    item_update: BillingMonthlyItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """월별 관리비 항목 수정 (인풋에서 커서가 나가면 저장)"""
+    try:
+        # 항목 조회
+        item = db.query(BillingMonthlyItem).filter(BillingMonthlyItem.id == item_id).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다.")
+        
+        # 업데이트할 데이터 준비
+        update_data = {}
+        if item_update.amount is not None:
+            item.amount = item_update.amount
+        if item_update.memo is not None:
+            item.memo = item_update.memo
+        
+        # 데이터베이스 업데이트
+        db.commit()
+        
+        return {
+            "message": "항목이 성공적으로 업데이트되었습니다.",
+            "updated_item": item
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"항목 업데이트 중 오류가 발생했습니다: {str(e)}")
+
+@app.delete("/students/{student_id}/monthly-items/{item_name}")
+def delete_monthly_item(
+    student_id: str,
+    item_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """학생의 특정 항목 1~12월 데이터 모두 삭제"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다.")
+        
+        # 해당 항목의 모든 월 데이터 조회
+        items = db.query(BillingMonthlyItem).filter(
+            BillingMonthlyItem.student_id == student_id,
+            BillingMonthlyItem.item_name == item_name
+        ).all()
+        
+        if not items:
+            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다.")
+        
+        # 모든 월 데이터 삭제
+        deleted_count = len(items)
+        for item in items:
+            db.delete(item)
+        
+        db.commit()
+        
+        return {
+            "message": f"'{item_name}' 항목의 {deleted_count}개월 데이터가 성공적으로 삭제되었습니다.",
+            "student_id": student_id,
+            "item_name": item_name,
+            "deleted_count": deleted_count
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"항목 삭제 중 오류가 발생했습니다: {str(e)}")
+
+@app.get("/monthly-items/{item_id}")
+def get_monthly_item(
+    item_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """특정 월별 관리비 항목 조회"""
+    try:
+        # 항목 조회
+        item = db.query(BillingMonthlyItem).filter(BillingMonthlyItem.id == item_id).first()
+        
+        if not item:
+            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다.")
+        
+        return item
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"항목 조회 중 오류가 발생했습니다: {str(e)}")

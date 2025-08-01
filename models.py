@@ -445,3 +445,19 @@ class CareUtilityPrice(Base):
     unit = Column(Text, nullable=False)  # 단위 (예: kWh, m3)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class BillingMonthlyItem(Base):
+    __tablename__ = "billing_monthly_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    item_name = Column(String, nullable=False)
+    amount = Column(Numeric, nullable=False, default=0)
+    memo = Column(String, nullable=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계 설정
+    student = relationship("Student", foreign_keys=[student_id])
