@@ -3372,7 +3372,7 @@ def change_student_residence(
                 student_id=student_id,
                 action="CHECK_OUT",
                 action_date=datetime.strptime(request.change_date, "%Y-%m-%d").date(),
-                note=f"退去 - {request.note}" if request.note else "退去"
+                note=f"퇴실 - {request.note}" if request.note else "퇴실"
             )
             db.add(room_log)
             
@@ -3387,7 +3387,7 @@ def change_student_residence(
                 user_id=current_user.id if current_user else None,
                 old_values={
                     "room_id": str(current_residence.room_id),
-                    "student_id": str(current_residence.student_id),
+                    "student_id": str(current_residence.resident_id),
                     "check_in_date": str(current_residence.check_in_date),
                     "is_active": True,
                     "check_out_date": None,
@@ -3395,7 +3395,7 @@ def change_student_residence(
                 },
                 new_values={
                     "room_id": str(current_residence.room_id),
-                    "student_id": str(current_residence.student_id),
+                    "student_id": str(current_residence.resident_id),
                     "check_in_date": str(current_residence.check_in_date),
                     "is_active": False,
                     "check_out_date": str(current_residence.check_out_date),
@@ -3479,7 +3479,7 @@ def change_student_residence(
                 user_id=current_user.id if current_user else None,
                 old_values={
                     "room_id": str(current_residence.room_id),
-                    "student_id": str(current_residence.student_id),
+                    "student_id": str(current_residence.resident_id),
                     "check_in_date": str(current_residence.check_in_date),
                     "is_active": True,
                     "check_out_date": None,
@@ -3487,7 +3487,7 @@ def change_student_residence(
                 },
                 new_values={
                     "room_id": str(current_residence.room_id),
-                    "student_id": str(current_residence.student_id),
+                    "student_id": str(current_residence.resident_id),
                     "check_in_date": str(current_residence.check_in_date),
                     "is_active": False,
                     "check_out_date": str(current_residence.check_out_date),
@@ -3506,7 +3506,7 @@ def change_student_residence(
                 user_id=current_user.id if current_user else None,
                 new_values={
                     "room_id": str(new_residence.room_id),
-                    "student_id": str(new_residence.student_id),
+                    "student_id": str(new_residence.resident_id),
                     "check_in_date": str(new_residence.check_in_date),
                     "is_active": new_residence.is_active,
                     "note": new_residence.note
