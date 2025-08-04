@@ -428,6 +428,7 @@ def get_students(
     building_name: Optional[str] = Query(None, description="건물 이름으로 검색"),
     room_number: Optional[str] = Query(None, description="방 번호로 검색"),
     status: Optional[str] = Query(None, description="상태로 검색"),
+    grade: Optional[str] = Query(None, description="등급으로 검색"),
     page: int = Query(1, description="페이지 번호", ge=1),  # 1 이상의 정수
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),  # 1~100 사이의 정수
     db: Session = Depends(get_db),
@@ -465,7 +466,8 @@ def get_students(
         query = query.filter(Room.room_number.ilike(f"%{room_number}%"))
     if status:
         query = query.filter(Student.status == status)
-
+    if grade:
+        query = query.filter(Grade.name.ilike(f"%{grade}%"))
     # 전체 항목 수 계산
     total_count = query.count()
 
