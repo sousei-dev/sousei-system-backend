@@ -7332,8 +7332,8 @@ def get_student_monthly_items(
         if month is not None:
             query = query.filter(BillingMonthlyItem.month == month)
         
-        # 정렬 (년도, 월, 정렬 순서)
-        items = query.order_by(BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).all()
+        # 정렬 (생성일 기준 내림차순, 년도, 월, 정렬 순서)
+        items = query.order_by(BillingMonthlyItem.created_at.asc(), BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).all()
         
         # 항목 이름별로 그룹화
         grouped_items = {}
@@ -7389,31 +7389,36 @@ def get_student_monthly_items(
 def create_student_monthly_items(
     student_id: str,
     item_data: BillingMonthlyItemCreate,
+    year: Optional[int] = Query(None, description="생성할 연도 (기본값: 현재 연도)"),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """학생의 월별 관리비 항목 생성 (0~12월 전체 생성)"""
+    """학생의 월별 관리비 항목 생성 (1~12월 전체 생성)"""
     try:
         # 학생 존재 여부 확인
         student = db.query(Student).filter(Student.id == student_id).first()
         if not student:
             raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다.")
         
+        # 연도 설정 (기본값: 현재 연도)
+        target_year = year if year is not None else datetime.now().year
+        
         # 기존 항목이 있는지 확인
         existing_items = db.query(BillingMonthlyItem).filter(
             BillingMonthlyItem.student_id == student_id,
-            BillingMonthlyItem.item_name == item_data.item_name
+            BillingMonthlyItem.item_name == item_data.item_name,
+            BillingMonthlyItem.year == target_year
         ).first()
         
         if existing_items:
-            raise HTTPException(status_code=400, detail="이미 존재하는 항목명입니다.")
+            raise HTTPException(status_code=400, detail=f"{target_year}년에 이미 존재하는 항목명입니다.")
         
         # 1~12월까지 항목 생성
         items_to_create = []
         for month in range(1, 13):  # 1~12월
             new_item = BillingMonthlyItem(
                 student_id=student_id,
-                year=datetime.now().year,
+                year=target_year,
                 month=month,
                 item_name=item_data.item_name,
                 amount=0,
@@ -7427,10 +7432,11 @@ def create_student_monthly_items(
         db.commit()
         
         return {
-            "message": "월별 관리비 항목이 성공적으로 생성되었습니다.",
+            "message": f"{target_year}년 월별 관리비 항목이 성공적으로 생성되었습니다.",
             "created_items": len(items_to_create),
             "student_id": student_id,
-            "item_name": item_data.item_name
+            "item_name": item_data.item_name,
+            "year": target_year
         }
         
     except Exception as e:
