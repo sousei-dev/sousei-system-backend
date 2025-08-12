@@ -7769,8 +7769,31 @@ def create_student_monthly_items(
         db.add_all(items_to_create)
         db.commit()
         
+        # 데이터베이스 로그 생성 (각 항목별로)
+        try:
+            for item in items_to_create:
+                create_database_log(
+                    db=db,
+                    table_name="billing_monthly_items",
+                    record_id=str(item.id),
+                    action="CREATE",
+                    user_id=current_user.get("id") if current_user else None,
+                    new_values={
+                        "student_id": str(item.student_id),
+                        "year": item.year,
+                        "month": item.month,
+                        "item_name": item.item_name,
+                        "amount": item.amount,
+                        "memo": item.memo,
+                        "sort_order": item.sort_order
+                    },
+                    note=f"월별 관리비 항목 생성 - {item.item_name} ({item.year}년 {item.month}월)"
+                )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
         return {
-            "message": f"{target_year}년 월별 관리비 항목이 성공적으로 생성되었습니다.",
+            "message": f"{target_year}年の月別管理費項目が正常に作成されました",
             "created_items": len(items_to_create),
             "student_id": student_id,
             "item_name": item_data.item_name,
@@ -7862,6 +7885,20 @@ def delete_monthly_item(
         if not items:
             raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다.")
         
+        # 삭제 전 데이터 저장 (로그용)
+        deleted_items_data = []
+        for item in items:
+            deleted_items_data.append({
+                "id": str(item.id),
+                "student_id": str(item.student_id),
+                "year": item.year,
+                "month": item.month,
+                "item_name": item.item_name,
+                "amount": item.amount,
+                "memo": item.memo,
+                "sort_order": item.sort_order
+            })
+        
         # 모든 월 데이터 삭제
         deleted_count = len(items)
         for item in items:
@@ -7869,8 +7906,23 @@ def delete_monthly_item(
         
         db.commit()
         
+        # 데이터베이스 로그 생성 (각 삭제된 항목별로)
+        try:
+            for item_data in deleted_items_data:
+                create_database_log(
+                    db=db,
+                    table_name="billing_monthly_items",
+                    record_id=item_data["id"],
+                    action="DELETE",
+                    user_id=current_user.get("id") if current_user else None,
+                    old_values=item_data,
+                    note=f"월별 관리비 항목 삭제 - {item_data['item_name']} ({item_data['year']}년 {item_data['month']}월)"
+                )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
         return {
-            "message": f"'{item_name}' 항목의 {deleted_count}개월 데이터가 성공적으로 삭제되었습니다.",
+            "message": f"'{item_name}'項目の{deleted_count}ヶ月データが正常に削除されました",
             "student_id": student_id,
             "item_name": item_name,
             "deleted_count": deleted_count
