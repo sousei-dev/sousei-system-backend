@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, status, UploadFile, File, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
-from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem, CareMealPrice, CareUtilityPrice, BillingMonthlyItem
-from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse, BillingMonthlyItemCreate, BillingMonthlyItemUpdate, BillingMonthlyItemResponse
+from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem, CareMealPrice, CareUtilityPrice, BillingMonthlyItem, BillingInvoice, BillingInvoiceItem, ElderlyMealRecord, ElderlyHospitalization
+from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse, BillingMonthlyItemCreate, BillingMonthlyItemUpdate, BillingMonthlyItemResponse, BillingInvoiceCreate, BillingInvoiceResponse, BillingInvoiceItemCreate, BillingInvoiceItemResponse, ElderlyMealRecordCreate, ElderlyMealRecordUpdate, ElderlyMealRecordResponse, ElderlyHospitalizationCreate, ElderlyHospitalizationResponse
 import uuid
 import json
 from uuid import UUID
@@ -25,9 +25,14 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.lib import colors
 from io import BytesIO
+import io
 from weasyprint import HTML
 from pydantic import BaseModel
 import time
+import calendar
+from urllib.parse import quote
+import pandas as pd
+import openpyxl
 
 templates = Jinja2Templates(directory="templates")
 
@@ -429,6 +434,8 @@ def get_students(
     room_number: Optional[str] = Query(None, description="방 번호로 검색"),
     status: Optional[str] = Query(None, description="상태로 검색"),
     grade: Optional[str] = Query(None, description="등급으로 검색"),
+    sort_by: Optional[str] = Query(None, description="정렬 필드 (nationality 또는 grade)"),
+    sort_desc: Optional[bool] = Query(False, description="내림차순 정렬 여부 (true: 내림차순, false: 오름차순)"),
     page: int = Query(1, description="페이지 번호", ge=1),  # 1 이상의 정수
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),  # 1~100 사이의 정수
     db: Session = Depends(get_db),
@@ -468,6 +475,20 @@ def get_students(
         query = query.filter(Student.status == status)
     if grade:
         query = query.filter(Grade.name.ilike(f"%{grade}%"))
+    
+    # 정렬 적용
+    if sort_by:
+        if sort_by == "nationality":
+            if sort_desc:
+                query = query.order_by(Student.nationality.desc())
+            else:
+                query = query.order_by(Student.nationality.asc())
+        elif sort_by == "grade.name":
+            if sort_desc:
+                query = query.order_by(Grade.name.desc())
+            else:
+                query = query.order_by(Grade.name.asc())
+    
     # 전체 항목 수 계산
     total_count = query.count()
 
@@ -711,13 +732,13 @@ def create_student(
                 # 방 존재 여부 확인
                 room = db.query(Room).filter(Room.id == student.room_id).first()
                 if not room:
-                    raise HTTPException(status_code=404, detail="지정된 방을 찾을 수 없습니다")
+                    raise HTTPException(status_code=404, detail="指定された部屋が見つかりません")
 
                 print(f"DEBUG: 방 확인 완료 - room_number: {room.room_number}")
 
                 # 방이 사용 가능한지 확인
                 if not room.is_available:
-                    raise HTTPException(status_code=400, detail="해당 방은 현재 사용할 수 없습니다")
+                    raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
 
                 # 방의 정원 확인
                 current_residents = db.query(Resident).filter(
@@ -729,7 +750,7 @@ def create_student(
                 print(f"DEBUG: 현재 거주자 수: {current_residents}, 정원: {room.capacity}")
                 
                 if room.capacity and current_residents >= room.capacity:
-                    raise HTTPException(status_code=400, detail="해당 방은 정원이 초과되어 입주할 수 없습니다")
+                    raise HTTPException(status_code=400, detail="該当の部屋は定員が超過しているため入居できません")
 
                 # 입주일 설정 (기본값: 오늘)
                 check_in_date = datetime.now().date()
@@ -1791,7 +1812,7 @@ def generate_company_invoice_pdf(
     # 회사 정보 조회
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
-        raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
+        raise HTTPException(status_code=404, detail="会社が見つかりません")
 
     # 해당 회사 소속 학생들의 청구서 조회
     invoices = db.query(Invoice).join(Student).options(
@@ -1804,7 +1825,7 @@ def generate_company_invoice_pdf(
     ).all()
 
     if not invoices:
-        raise HTTPException(status_code=404, detail="해당 월의 청구서가 없습니다")
+        raise HTTPException(status_code=404, detail="該当月の請求書がありません")
 
     # 총 금액 계산
     total_amount = sum(invoice.total_amount for invoice in invoices)
@@ -2567,6 +2588,7 @@ def delete_room(
 @app.get("/rooms/{room_id}/residents")
 def get_room_residents(
     room_id: str,
+    resident_type: Optional[str] = Query(None, description="거주자 타입으로 필터링 (student 또는 elderly)"),
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     db: Session = Depends(get_db),
@@ -2577,15 +2599,20 @@ def get_room_residents(
     if not room:
         raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
 
-    # 해당 방에 실제 입주 중인 학생들 조회 (Resident 테이블 기준)
-    query = db.query(Student).options(
-        joinedload(Student.company),
-        joinedload(Student.grade)
-    ).join(Resident).filter(
+    # 해당 방에 실제 입주 중인 거주자들 조회 (Resident 테이블 기준)
+    query = db.query(Resident).filter(
         Resident.room_id == room_id,
         Resident.is_active == True,
         Resident.check_out_date.is_(None)  # 퇴실일이 없는 경우 (현재 입주 중)
     )
+    
+    # 거주자 타입에 따라 조인 설정
+    if resident_type == "elderly":
+        query = query.options(joinedload(Resident.elderly))
+    elif resident_type == "student":
+        query = query.options(joinedload(Resident.student))
+    else:  # 모든 타입 조회
+        query = query.options(joinedload(Resident.student), joinedload(Resident.elderly))
 
     # 전체 항목 수 계산
     total_count = query.count()
@@ -2598,44 +2625,53 @@ def get_room_residents(
 
     # 응답 데이터 준비
     result = []
-    for student in residents:
-        # 해당 학생의 입주 정보 가져오기
-        resident_info = db.query(Resident).filter(
-            Resident.resident_id == student.id,
-            Resident.room_id == room_id,
-            Resident.is_active == True
-        ).first()
-        
+    for resident in residents:
         resident_data = {
-            "id": str(resident_info.id),
-            "room_id": str(resident_info.room_id),
-            "resident_id": str(resident_info.resident_id),
-            "resident_type": resident_info.resident_type,
-            "check_in_date": resident_info.check_in_date.strftime("%Y-%m-%d"),
-            "check_out_date": resident_info.check_out_date.strftime("%Y-%m-%d") if resident_info.check_out_date else None,
-            "is_active": resident_info.is_active,
-            "note": resident_info.note,
-            "created_at": resident_info.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": resident_info.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "id": str(resident.id),
+            "room_id": str(resident.room_id),
+            "resident_id": str(resident.resident_id),
+            "resident_type": resident.resident_type,
+            "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
+            "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
+            "is_active": resident.is_active,
+            "note": resident.note,
+            "created_at": resident.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": resident.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
             "room": {
                 "id": str(room.id),
                 "room_number": room.room_number,
                 "building_id": str(room.building_id)
-            },
-            "student": {
-                "id": str(student.id),
-                "name": student.name,
-                "name_katakana": student.name_katakana,
-                "nationality": student.nationality,
-                "phone": student.phone,
-                "email": student.email,
-                "avatar": student.avatar,
-                "gender": student.gender,
-                "birth_date": student.birth_date.strftime("%Y-%m-%d") if student.birth_date else None,
-                "japanese_level": student.japanese_level,
-                "local_address": student.local_address
             }
         }
+        
+        # 거주자 타입에 따라 다른 데이터 추가
+        if resident.resident_type == "elderly" and resident.elderly:
+            resident_data["elderly"] = {
+                "id": str(resident.elderly.id),
+                "name": resident.elderly.name,
+                "name_katakana": resident.elderly.name_katakana,
+                "gender": resident.elderly.gender,
+                "birth_date": resident.elderly.birth_date.strftime("%Y-%m-%d") if resident.elderly.birth_date else None,
+                "phone": resident.elderly.phone,
+                "care_level": resident.elderly.care_level,
+                "status": resident.elderly.status,
+                "avatar": resident.elderly.avatar,
+            }
+        elif resident.resident_type == "student" and resident.student:
+            resident_data["student"] = {
+                "id": str(resident.student.id),
+                "name": resident.student.name,
+                "name_katakana": resident.student.name_katakana,
+                "nationality": resident.student.nationality,
+                "phone": resident.student.phone,
+                "email": resident.student.email if resident.student.email else "",
+                "avatar": resident.student.avatar,
+                "gender": resident.student.gender,
+                "birth_date": resident.student.birth_date.strftime("%Y-%m-%d") if resident.student.birth_date else None,
+                "japanese_level": resident.student.japanese_level,
+                "local_address": resident.student.local_address
+            }
+        
         result.append(resident_data)
 
     return {
@@ -2671,6 +2707,7 @@ def get_room_residents_count(
 @app.get("/rooms/{room_id}/residence-history")
 def get_room_residence_history(
     room_id: str,
+    resident_type: Optional[str] = Query(None, description="거주자 타입으로 필터링 (student 또는 elderly)"),
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     is_active: Optional[bool] = Query(None, description="활성 상태로 필터링"),
@@ -2683,9 +2720,15 @@ def get_room_residence_history(
         raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
 
     # 해당 방의 모든 입주 기록 조회
-    query = db.query(Resident).options(
-        joinedload(Resident.student)
-    ).filter(Resident.room_id == room_id)
+    query = db.query(Resident)
+    
+    # 거주자 타입에 따라 조인 설정
+    if resident_type == "elderly":
+        query = query.options(joinedload(Resident.elderly))
+    else:  # student 또는 기본값
+        query = query.options(joinedload(Resident.student))
+    
+    query = query.filter(Resident.room_id == room_id)
 
     # 활성 상태 필터링 (선택사항)
     if is_active is not None:
@@ -2706,7 +2749,7 @@ def get_room_residence_history(
         resident_data = {
             "id": str(resident.id),
             "room_id": str(resident.room_id),
-            "student_id": str(resident.resident_id),
+            "resident_id": str(resident.resident_id),
             "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
             "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
             "is_active": resident.is_active,
@@ -2718,7 +2761,24 @@ def get_room_residence_history(
                 "room_number": room.room_number,
                 "building_id": str(room.building_id)
             },
-            "student": {
+            "resident_type": resident.resident_type
+        }
+        
+        # 거주자 타입에 따라 다른 데이터 추가
+        if resident_type == "elderly" and resident.elderly:
+            resident_data["elderly"] = {
+                "id": str(resident.elderly.id),
+                "name": resident.elderly.name,
+                "name_katakana": resident.elderly.name_katakana,
+                "gender": resident.elderly.gender,
+                "birth_date": resident.elderly.birth_date.strftime("%Y-%m-%d") if resident.elderly.birth_date else None,
+                "phone": resident.elderly.phone,
+                "care_level": resident.elderly.care_level,
+                "status": resident.elderly.status,
+                "avatar": resident.elderly.avatar,
+            }
+        elif (resident_type == "student" or resident_type is None) and resident.student:
+            resident_data["student"] = {
                 "id": str(resident.student.id),
                 "name": resident.student.name,
                 "name_katakana": resident.student.name_katakana,
@@ -2731,7 +2791,7 @@ def get_room_residence_history(
                 "japanese_level": resident.student.japanese_level,
                 "local_address": resident.student.local_address
             }
-        }
+        
         result.append(resident_data)
 
     return {
@@ -2837,7 +2897,7 @@ def check_in_student(
     ).first()
     
     if existing_resident:
-        raise HTTPException(status_code=400, detail="해당 학생은 이미 이 방에 입주 중입니다")
+        raise HTTPException(status_code=400, detail="該当の学生は既にこの部屋に入居中です")
 
     try:
         # 입주 기록 생성
@@ -3225,6 +3285,202 @@ def get_student_residence_history(
         "total_pages": total_pages,
         "current_page": page
     }
+
+@app.get("/elderly/{elderly_id}/residence-history")
+def get_elderly_residence_history(
+    elderly_id: str,
+    page: int = Query(1, description="페이지 번호", ge=1),
+    size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    is_active: Optional[bool] = Query(None, description="활성 상태로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 노인자 존재 여부 확인
+    elderly = db.query(Elderly).filter(Elderly.id == elderly_id).first()
+    if not elderly:
+        raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+
+    # 해당 노인자의 모든 거주 기록 조회
+    query = db.query(Resident).options(
+        joinedload(Resident.room).joinedload(Room.building)
+    ).filter(Resident.resident_id == elderly_id)
+
+    # 활성 상태 필터링 (선택사항)
+    if is_active is not None:
+        query = query.filter(Resident.is_active == is_active)
+
+    # 전체 항목 수 계산
+    total_count = query.count()
+
+    # 페이지네이션 적용 (최신 기록부터)
+    residents = query.order_by(Resident.created_at.desc()).offset((page - 1) * size).limit(size).all()
+
+    # 전체 페이지 수 계산
+    total_pages = (total_count + size - 1) // size
+
+    # 응답 데이터 준비
+    result = []
+    for resident in residents:
+        resident_data = {
+            "id": str(resident.id),
+            "room_id": str(resident.room_id),
+            "elderly_id": str(resident.resident_id),
+            "resident_type": resident.resident_type,
+            "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
+            "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
+            "is_active": resident.is_active,
+            "note": resident.note,
+            "created_at": resident.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": resident.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "room": {
+                "id": str(resident.room.id),
+                "room_number": resident.room.room_number,
+                "building_id": str(resident.room.building_id),
+                "floor": resident.room.floor,
+                "rent": resident.room.rent
+            },
+            "building": {
+                "id": str(resident.room.building.id),
+                "name": resident.room.building.name,
+                "address": resident.room.building.address
+            },
+            "elderly": {
+                "id": str(elderly.id),
+                "name": elderly.name,
+                "name_katakana": elderly.name_katakana,
+                "gender": elderly.gender,
+                "birth_date": elderly.birth_date.strftime("%Y-%m-%d") if elderly.birth_date else None,
+                "phone": elderly.phone,
+                "care_level": elderly.care_level,
+                "status": elderly.status,
+                "avatar": elderly.avatar
+            }
+        }
+        result.append(resident_data)
+
+    return {
+        "elderly": {
+            "id": str(elderly.id),
+            "name": elderly.name,
+            "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None
+        },
+        "items": result,
+        "total": total_count,
+        "total_pages": total_pages,
+        "current_page": page
+    }
+
+@app.get("/residents/{resident_id}")
+def get_resident(
+    resident_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """특정 거주자의 상세 정보를 조회합니다."""
+    # 거주자 존재 여부 확인
+    resident = db.query(Resident).options(
+        joinedload(Resident.room).joinedload(Room.building),
+        joinedload(Resident.student),
+        joinedload(Resident.elderly)
+    ).filter(Resident.id == resident_id).first()
+    
+    if not resident:
+        raise HTTPException(status_code=404, detail="거주자를 찾을 수 없습니다")
+
+    # 기본 거주자 정보
+    resident_data = {
+        "id": str(resident.id),
+        "room_id": str(resident.room_id),
+        "resident_id": str(resident.resident_id),
+        "resident_type": resident.resident_type,
+        "check_in_date": resident.check_in_date.strftime("%Y-%m-%d"),
+        "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
+        "is_active": resident.is_active,
+        "note": resident.note,
+        "created_at": resident.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": resident.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "room": {
+            "id": str(resident.room.id),
+            "room_number": resident.room.room_number,
+            "building_id": str(resident.room.building_id),
+            "floor": resident.room.floor,
+            "rent": resident.room.rent,
+            "maintenance": resident.room.maintenance,
+            "service": resident.room.service,
+            "capacity": resident.room.capacity,
+            "is_available": resident.room.is_available,
+            "note": resident.room.note
+        },
+        "building": {
+            "id": str(resident.room.building.id),
+            "name": resident.room.building.name,
+            "address": resident.room.building.address,
+            "total_rooms": resident.room.building.total_rooms,
+            "note": resident.room.building.note,
+            "resident_type": resident.room.building.resident_type
+        }
+    }
+    
+    # 거주자 타입에 따라 다른 정보 추가
+    if resident.resident_type == "student" and resident.student:
+        resident_data["student"] = {
+            "id": str(resident.student.id),
+            "name": resident.student.name,
+            "name_katakana": resident.student.name_katakana,
+            "nationality": resident.student.nationality,
+            "phone": resident.student.phone,
+            "email": resident.student.email if resident.student.email else "",
+            "avatar": resident.student.avatar,
+            "gender": resident.student.gender,
+            "birth_date": resident.student.birth_date.strftime("%Y-%m-%d") if resident.student.birth_date else None,
+            "japanese_level": resident.student.japanese_level,
+            "local_address": resident.student.local_address,
+            "status": resident.student.status,
+            "student_type": resident.student.student_type,
+            "consultant": resident.student.consultant,
+            "current_room_id": str(resident.student.current_room_id) if resident.student.current_room_id else None
+        }
+        
+        # 회사 정보 추가 (있는 경우)
+        if resident.student.company:
+            resident_data["student"]["company"] = {
+                "id": str(resident.student.company.id),
+                "name": resident.student.company.name,
+                "address": resident.student.company.address,
+            }
+        
+        # 등급 정보 추가 (있는 경우)
+        if resident.student.grade:
+            resident_data["student"]["grade"] = {
+                "id": str(resident.student.grade.id),
+                "name": resident.student.grade.name,
+            }
+            
+    elif resident.resident_type == "elderly" and resident.elderly:
+        resident_data["elderly"] = {
+            "id": str(resident.elderly.id),
+            "name": resident.elderly.name,
+            "name_katakana": resident.elderly.name_katakana,
+            "gender": resident.elderly.gender,
+            "birth_date": resident.elderly.birth_date.strftime("%Y-%m-%d") if resident.elderly.birth_date else None,
+            "phone": resident.elderly.phone,
+            "care_level": resident.elderly.care_level,
+            "status": resident.elderly.status,
+            "avatar": resident.elderly.avatar,
+            "email": resident.elderly.email,
+            "current_room_id": str(resident.elderly.current_room_id) if resident.elderly.current_room_id else None,
+            "note": resident.elderly.note
+        }
+        
+        # 카테고리 정보 추가 (있는 경우)
+        if resident.elderly.category:
+            resident_data["elderly"]["category"] = {
+                "id": str(resident.elderly.category.id),
+                "category": resident.elderly.category.category,
+                "label": resident.elderly.category.label
+            }
+
+    return resident_data
 
 @app.get("/students/{student_id}/residence-history/monthly")
 def get_student_residence_history_monthly(
@@ -3643,6 +3899,7 @@ def create_new_residence(
             id=str(uuid.uuid4()),
             room_id=request.new_room_id,
             resident_id=student_id,
+            resident_type="student",  # 명시적으로 student 타입 설정
             check_in_date=check_in_date,
             check_out_date=check_out_date,
             is_active=is_currently_residing,
@@ -4117,16 +4374,16 @@ def get_room_charges(
             )
         except ValueError:
             raise HTTPException(status_code=400, detail="청구 월 형식이 올바르지 않습니다 (YYYY-MM)")
-
+    
     # 전체 항목 수 계산
     total_count = query.count()
-
+    
     # 페이지네이션 적용 (최신순)
     charges = query.order_by(RoomCharge.charge_month.desc()).offset((page - 1) * size).limit(size).all()
 
     # 전체 페이지 수 계산
     total_pages = (total_count + size - 1) // size
-
+    
     # 응답 데이터 준비
     result = []
     for charge in charges:
@@ -4166,7 +4423,7 @@ def get_room_charges(
             charge_data["charge_items"].append(item_data)
 
         result.append(charge_data)
-
+    
     return {
         "items": result,
         "total": total_count,
@@ -4501,7 +4758,7 @@ def delete_charge_item(
 def create_room_utility(
     utility: RoomUtilityCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """방 공과금 등록"""
     # 방 존재 여부 확인
@@ -4539,25 +4796,25 @@ def create_room_utility(
         
         db.commit()
         db.refresh(existing_utility)
-        
+
         # 응답 데이터 준비
         response_data = {
-            "id": str(existing_utility.id),
-            "room_id": str(existing_utility.room_id),
-            "utility_type": existing_utility.utility_type,
-            "period_start": existing_utility.period_start,
-            "period_end": existing_utility.period_end,
-            "usage": float(existing_utility.usage) if existing_utility.usage else None,
-            "unit_price": float(existing_utility.unit_price) if existing_utility.unit_price else None,
-            "total_amount": float(existing_utility.total_amount) if existing_utility.total_amount else None,
-            "charge_month": existing_utility.charge_month,
-            "memo": existing_utility.memo,
-            "created_at": existing_utility.created_at,
-            "room": {
-                "id": str(room.id),
-                "room_number": room.room_number,
-                "building_name": room.building.name if room.building else None
-            }
+          "id": str(existing_utility.id),
+          "room_id": str(existing_utility.room_id),
+          "utility_type": existing_utility.utility_type,
+          "period_start": existing_utility.period_start,
+          "period_end": existing_utility.period_end,
+          "usage": float(existing_utility.usage) if existing_utility.usage else None,
+          "unit_price": float(existing_utility.unit_price) if existing_utility.unit_price else None,
+          "total_amount": float(existing_utility.total_amount) if existing_utility.total_amount else None,
+          "charge_month": existing_utility.charge_month,
+          "memo": existing_utility.memo,
+          "created_at": existing_utility.created_at,
+          "room": {
+              "id": str(room.id),
+              "room_number": room.room_number,
+              "building_name": room.building.name if room.building else None
+          }
         }
         
         return response_data
@@ -4586,7 +4843,7 @@ def create_room_utility(
             table_name="room_utilities",
             record_id=str(new_utility.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "room_id": str(new_utility.room_id),
                 "utility_type": new_utility.utility_type,
@@ -4765,7 +5022,7 @@ def update_room_utility(
         "charge_month": str(utility.charge_month),
         "memo": utility.memo
     }
-    
+
     try:
         # 업데이트할 데이터 준비
         update_data = utility_update.dict(exclude_unset=True)
@@ -4801,7 +5058,7 @@ def update_room_utility(
 
         db.commit()
         db.refresh(utility)
-        
+
         # 로그 생성
         create_database_log(
             db=db,
@@ -4836,7 +5093,7 @@ def update_room_utility(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"공과금 수정 중 오류가 발생했습니다: {str(e)}"
+            detail=f"公共費修正中にエラーが発生しました: {str(e)}"
         )
 
 @app.delete("/rooms/{room_id}/utilities/{utility_id}")
@@ -4844,7 +5101,7 @@ def delete_room_utility_by_room(
     room_id: str,
     utility_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """특정 방의 공과금 삭제"""
     # 방 존재 여부 확인
@@ -4884,7 +5141,7 @@ def delete_room_utility_by_room(
             table_name="room_utilities",
             record_id=str(utility.id),
             action="DELETE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             note="部屋光熱費削除"
         )
@@ -4895,34 +5152,35 @@ def delete_room_utility_by_room(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"공과금 삭제 중 오류가 발생했습니다: {str(e)}"
+            detail=f"公共費削除中にエラーが発生しました: {str(e)}"
         )
 
 @app.get("/rooms/{room_id}/utilities")
 def get_room_utilities_by_room(
     room_id: str,
-    utility_type: Optional[str] = Query(None, description="공과금 유형으로 필터링"),
-    page: int = Query(1, description="페이지 번호", ge=1),
-    size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    utility_type: Optional[str] = Query(None, description="公共費タイプでフィルタリング"),
+    page: int = Query(1, description="ページ番号", ge=1),
+    size: int = Query(10, description="ページあたりのアイテム数", ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """특정 방의 공과금 목록 조회"""
-    # 방 존재 여부 확인
+    """特定部屋の公共費リストを取得"""
+    # 部屋の存在確認
     room = db.query(Room).filter(Room.id == room_id).first()
     if not room:
-        raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
+        raise HTTPException(status_code=404, detail="部屋が見つかりません")
 
-    # 해당 방의 공과금 조회
+    # 該当部屋の公共費を取得
     query = db.query(RoomUtility).filter(RoomUtility.room_id == room_id)
 
-    # 공과금 유형 필터링
+    # 公共費タイプでフィルタリング
     if utility_type:
         query = query.filter(RoomUtility.utility_type == utility_type)
 
-    # 전체 항목 수 계산
+    # 全アイテム数を計算
     total_count = query.count()
 
+    # ページネーション適用 (最新順)
     # 페이지네이션 적용 (최신순)
     utilities = query.order_by(RoomUtility.charge_month.desc(), RoomUtility.created_at.desc()).offset((page - 1) * size).limit(size).all()
 
@@ -5126,7 +5384,7 @@ def calculate_utility_allocation(
             allocations.append(allocation)
 
     else:
-        raise HTTPException(status_code=400, detail="지원하지 않는 배분 방법입니다")
+        raise HTTPException(status_code=400, detail="サポートされていない配分方法です")
 
     # 일수 기준으로 정렬
     allocations.sort(key=lambda x: x["days_used"], reverse=True)
@@ -5227,6 +5485,8 @@ def get_monthly_invoice_preview_by_students(
         all_utilities_data = []
         has_utilities_for_student = False
 
+        print(f"[DEBUG] {student.name} - 거주 기록 수: {len(resident_records)}")
+        
         for resident_info in resident_records:
             # 전월에 거주한 일수 계산
             # 실제 입주일과 전월 시작일 중 늦은 날짜를 사용
@@ -5272,12 +5532,12 @@ def get_monthly_invoice_preview_by_students(
                 # check_in_date와 check_out_date가 같은 달이 아닌 경우
                 if (check_in_year != check_out_year) or (check_in_month != check_out_month):
                     # 퇴실일 달 기준으로 계산
-                    rent_amount = days_in_month * 1000
-                    print(f"[DEBUG] {student.name} - 퇴실일 달 기준 계산: {days_in_month}일 × 1,000 = {rent_amount}엔")
+                    rent_amount = min(days_in_month * 1000, 30000)
+                    print(f"[DEBUG] {student.name} - 퇴실일 달 기준 계산: {days_in_month}일 × 1,000 = {rent_amount}엔 (최대 30,000엔)")
                 else:
                     # 같은 달인 경우 - 퇴실일이 있으면 항상 일별 계산
-                    rent_amount = days_in_month * 1000
-                    print(f"[DEBUG] {student.name} - 같은 달, 퇴실일 있음: {days_in_month}일 × 1,000 = {rent_amount}엔")
+                    rent_amount = min(days_in_month * 1000, 30000)
+                    print(f"[DEBUG] {student.name} - 같은 달, 퇴실일 있음: {days_in_month}일 × 1,000 = {rent_amount}엔 (최대 30,000엔)")
             else:
                 # 퇴실일이 없는 경우
                 # 입주일이 1일이고 해당 월 전체를 거주하는 경우만 30,000엔
@@ -5286,8 +5546,8 @@ def get_monthly_invoice_preview_by_students(
                     print(f"[DEBUG] {student.name} - 퇴실일 없음, 1일 입주, 전체 월 거주: 30,000엔")
                 else:
                     # 그 외의 경우는 일별 계산
-                    rent_amount = days_in_month * 1000
-                    print(f"[DEBUG] {student.name} - 퇴실일 없음, 일별 계산: {days_in_month}일 × 1,000 = {rent_amount}엔")
+                    rent_amount = min(days_in_month * 1000, 30000)
+                    print(f"[DEBUG] {student.name} - 퇴실일 없음, 일별 계산: {days_in_month}일 × 1,000 = {rent_amount}엔 (최대 30,000엔)")
 
             # 와이파이 비용 계산
             if resident_info.check_out_date is not None:
@@ -5300,12 +5560,12 @@ def get_monthly_invoice_preview_by_students(
                 # check_in_date와 check_out_date가 같은 달이 아닌 경우
                 if (check_in_year != check_out_year) or (check_in_month != check_out_month):
                     # 퇴실일 달 기준으로 계산
-                    wifi_amount = int(days_in_month * (700 / 30))
-                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 달 기준 계산: {days_in_month}일 × (700/30) = {wifi_amount}엔")
+                    wifi_amount = min(int(days_in_month * (700 / 30)), 700)
+                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 달 기준 계산: {days_in_month}일 × (700/30) = {wifi_amount}엔 (최대 700엔)")
                 else:
                     # 같은 달인 경우 - 퇴실일이 있으면 항상 일별 계산
-                    wifi_amount = int(days_in_month * (700 / 30))
-                    print(f"[DEBUG] {student.name} - 와이파이 같은 달, 퇴실일 있음: {days_in_month}일 × (700/30) = {wifi_amount}엔")
+                    wifi_amount = min(int(days_in_month * (700 / 30)), 700)
+                    print(f"[DEBUG] {student.name} - 와이파이 같은 달, 퇴실일 있음: {days_in_month}일 × (700/30) = {wifi_amount}엔 (최대 700엔)")
             else:
                 # 퇴실일이 없는 경우
                 # 입주일이 1일이고 해당 월 전체를 거주하는 경우만 700엔 고정
@@ -5314,14 +5574,16 @@ def get_monthly_invoice_preview_by_students(
                     print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 1일 입주, 전체 월 거주: 700엔")
                 else:
                     # 그 외의 경우는 일별 계산
-                    wifi_amount = int(days_in_month * (700 / 30))
-                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 일별 계산: {days_in_month}일 × (700/30) = {wifi_amount}엔")
+                    wifi_amount = min(int(days_in_month * (700 / 30)), 700)
+                    print(f"[DEBUG] {student.name} - 와이파이 퇴실일 없음, 일별 계산: {days_in_month}일 × (700/30) = {wifi_amount}엔 (최대 700엔)")
 
             # 3. 공과금 조회 및 계산
             utilities_data = []
             room_electricity_amount = 0
             room_water_amount = 0
             room_gas_amount = 0
+            
+            print(f"[DEBUG] {student.name} - 현재 거주 기록 계산 완료: rent={rent_amount}, wifi={wifi_amount}")
             has_utilities = False
 
             if resident_info.room:
@@ -5372,7 +5634,8 @@ def get_monthly_invoice_preview_by_students(
                             "total_amount": float(utility.total_amount),
                             "student_days": student_days,
                             "total_person_days": total_person_days,
-                            "student_amount": student_amount
+                            "student_amount": student_amount,
+                            "room_number": resident_info.room.room_number
                         })
                         
                         # 공과금 유형별로 금액 누적
@@ -5382,8 +5645,13 @@ def get_monthly_invoice_preview_by_students(
                             room_water_amount += student_amount
                         elif utility.utility_type == "gas":
                             room_gas_amount += student_amount
+                        
+                        print(f"[DEBUG] {student.name} - 방 {resident_info.room.room_number} 유틸리티: {utility.utility_type} = {student_amount}엔")
 
             # 각 거주 기록별 데이터 누적
+            print(f"[DEBUG] {student.name} - 거주 기록 누적 전: rent={total_rent_amount_for_student}, wifi={total_wifi_amount_for_student}")
+            print(f"[DEBUG] {student.name} - 현재 거주 기록: rent={rent_amount}, wifi={wifi_amount}")
+            
             total_rent_amount_for_student += rent_amount
             total_wifi_amount_for_student += wifi_amount
             total_electricity_amount_for_student += room_electricity_amount
@@ -5392,6 +5660,14 @@ def get_monthly_invoice_preview_by_students(
             if has_utilities:
                 has_utilities_for_student = True
                 all_utilities_data.extend(utilities_data)
+            
+            print(f"[DEBUG] {student.name} - 거주 기록 누적 후: rent={total_rent_amount_for_student}, wifi={total_wifi_amount_for_student}")
+            
+            # 방 이동으로 인한 총액 제한 적용
+            total_rent_amount_for_student = min(total_rent_amount_for_student, 30000)
+            total_wifi_amount_for_student = min(total_wifi_amount_for_student, 700)
+            
+            print(f"[DEBUG] {student.name} - 제한 적용 후: rent={total_rent_amount_for_student}, wifi={total_wifi_amount_for_student}")
 
         # 방번호와 건물명 처리 (복수 거주인 경우)
         if len(resident_records) > 1:
@@ -6119,11 +6395,12 @@ def get_monthly_invoice_preview_by_rooms(
                 # 야칭 계산 (30,000엔 / 월)
                 rent_per_day = 30000 / total_days_in_month
                 rent_amount = rent_per_day * days_in_month
-
-                student_rent_data[student_name] = {
-                    "days": days_in_month,
-                    "rent_amount": rent_amount
-                }
+                
+                if days_in_month > 0:
+                    student_rent_data[student_name] = {
+                        "days": days_in_month,
+                        "rent_amount": rent_amount
+                    }
 
             rooms_data.append({
                 "room_id": str(room.id),
@@ -6725,8 +7002,10 @@ def get_elderly(
     gender: Optional[str] = Query(None, description="성별로 검색"),
     care_level: Optional[str] = Query(None, description="요양 등급으로 검색"),
     status: Optional[str] = Query(None, description="상태로 검색"),
-    building_name: Optional[str] = Query(None, description="건물 이름으로 검색"),
+    building_id: Optional[str] = Query(None, description="건물 아이디로 검색"),
     room_number: Optional[str] = Query(None, description="방 번호로 검색"),
+    sort_by: Optional[str] = Query(None, description="정렬 필드 (name 또는 current_room.room_number)"),
+    sort_desc: Optional[bool] = Query(False, description="내림차순 정렬 여부 (true: 내림차순, false: 오름차순)"),
     page: int = Query(1, description="페이지 번호", ge=1),
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     db: Session = Depends(get_db),
@@ -6736,7 +7015,11 @@ def get_elderly(
     고령자 목록을 조회합니다.
     """
     # 기본 쿼리 생성
-    query = db.query(Elderly).options(joinedload(Elderly.current_room).joinedload(Room.building),joinedload(Elderly.category))
+    query = db.query(Elderly).options(
+        joinedload(Elderly.current_room).joinedload(Room.building),
+        joinedload(Elderly.category),
+        joinedload(Elderly.hospitalizations)
+    )
     
     # 검색 조건 적용
     if name:
@@ -6754,16 +7037,31 @@ def get_elderly(
     if status:
         query = query.filter(Elderly.status == status)
     
-    if building_name:
+    if building_id:
         query = query.join(Room, Elderly.current_room_id == Room.id).join(Building, Room.building_id == Building.id)
-        query = query.filter(Building.name.ilike(f"%{building_name}%"))
+        query = query.filter(Building.id == building_id)
     
     if room_number:
         query = query.join(Room, Elderly.current_room_id == Room.id)
         query = query.filter(Room.room_number.ilike(f"%{room_number}%"))
     
-    # 생성일 기준 내림차순 정렬
-    query = query.order_by(Elderly.created_at.desc())
+    # 정렬 적용
+    if sort_by:
+        if sort_by == "name":
+            if sort_desc:
+                query = query.order_by(Elderly.name.desc())
+            else:
+                query = query.order_by(Elderly.name.asc())
+        elif sort_by == "current_room.room_number":
+            # Room 테이블과 조인하여 방번호로 정렬
+            query = query.outerjoin(Room, Elderly.current_room_id == Room.id)
+            if sort_desc:
+                query = query.order_by(Room.room_number.desc())
+            else:
+                query = query.order_by(Room.room_number.asc())
+    else:
+        # 기본 정렬: 생성일 기준 내림차순
+        query = query.order_by(Elderly.created_at.desc())
     
     # 전체 개수 계산
     total_count = query.count()
@@ -6775,19 +7073,57 @@ def get_elderly(
     # 응답 데이터 구성
     elderly_data = []
     for elderly in elderly_list:
+        # 입원 상태 확인
+        hospitalization_status = "正常"
+        latest_hospitalization = None
+        
+        if elderly.hospitalizations:
+            # 가장 최근 입원 기록 찾기
+            latest_hospitalization = max(elderly.hospitalizations, key=lambda x: x.date)
+            
+            # 입원 기록이 있고 퇴원 기록이 없으면 입원중
+            admission_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'admission']
+            discharge_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'discharge']
+            
+            if admission_records and not discharge_records:
+                # 입원 기록만 있고 퇴원 기록이 없으면 입원중
+                hospitalization_status = "入院中"
+            elif admission_records and discharge_records:
+                # 입원과 퇴원 기록이 모두 있으면 최신 기록 확인
+                latest_admission = max(admission_records, key=lambda x: x.date)
+                latest_discharge = max(discharge_records, key=lambda x: x.date)
+                
+                if latest_admission.date > latest_discharge.date:
+                    hospitalization_status = "入院中"
+                else:
+                    hospitalization_status = "正常"
+        
         elderly_dict = {
-            "id": str(elderly.id),
-            "name": elderly.name,
+        "id": str(elderly.id),
+        "name": elderly.name,
             "email": elderly.email,
             "created_at": elderly.created_at,
             "phone": elderly.phone,
             "avatar": elderly.avatar,
-            "name_katakana": elderly.name_katakana,
-            "gender": elderly.gender,
+        "name_katakana": elderly.name_katakana,
+        "gender": elderly.gender,
             "birth_date": elderly.birth_date,
             "status": elderly.status,
             "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
             "care_level": elderly.care_level,
+            "hospitalization_status": hospitalization_status,
+            "latest_hospitalization": {
+                "id": str(latest_hospitalization.id),
+                "elderly_id": str(latest_hospitalization.elderly_id),
+                "hospitalization_type": latest_hospitalization.hospitalization_type,
+                "hospital_name": latest_hospitalization.hospital_name,
+                "date": latest_hospitalization.date,
+                "last_meal_date": latest_hospitalization.last_meal_date,
+                "last_meal_type": latest_hospitalization.last_meal_type,
+                "meal_resume_date": latest_hospitalization.meal_resume_date,
+                "meal_resume_type": latest_hospitalization.meal_resume_type,
+                "note": latest_hospitalization.note
+            } if latest_hospitalization else None,
             "current_room": None
         }
         
@@ -7457,7 +7793,13 @@ def update_monthly_item(
         # 항목 조회
         item = db.query(BillingMonthlyItem).filter(BillingMonthlyItem.id == item_id).first()
         if not item:
-            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다.")
+            raise HTTPException(status_code=404, detail="該当の項目が見つかりません")
+        
+        # 기존 값 저장 (로그용)
+        old_values = {
+            "amount": item.amount,
+            "memo": item.memo
+        }
         
         # 업데이트할 데이터 준비
         update_data = {}
@@ -7469,14 +7811,33 @@ def update_monthly_item(
         # 데이터베이스 업데이트
         db.commit()
         
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="billing_monthly_items",
+                record_id=str(item.id),
+                action="UPDATE",
+                user_id=current_user.get("id") if current_user else None,
+                old_values=old_values,
+                new_values={
+                    "amount": item.amount,
+                    "memo": item.memo
+                },
+                changed_fields=["amount", "memo"] if item_update.amount is not None or item_update.memo is not None else [],
+                note=f"월별 관리비 항목 수정 - {item.item_name}"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
         return {
-            "message": "항목이 성공적으로 업데이트되었습니다.",
+            "message": "項目が正常に更新されました",
             "updated_item": item
         }
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"항목 업데이트 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"項目更新中にエラーが発生しました: {str(e)}")
 
 @app.delete("/students/{student_id}/monthly-items/{item_name}")
 def delete_monthly_item(
@@ -7537,3 +7898,1338 @@ def get_monthly_item(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"항목 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.post("/billing-invoices/generate")
+def generate_company_invoice_pdfV2(
+    company_id: str,
+    year: int,
+    month: int,
+    student_type: Optional[str] = Query(None, description="학생 타입으로 필터링"),
+    memo: Optional[str] = Query(None, description="비고 작성"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """회사별 청구서 생성 (billing_monthly_items 기반) 및 PDF 생성"""
+    try:
+        # 회사 존재 여부 확인
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="会社が見つかりません。")
+        
+        # 해당 회사의 학생들 조회 (학생 타입 필터링)
+        query = db.query(Student).filter(Student.company_id == company_id)
+        if student_type:
+            query = query.filter(Student.student_type == student_type)
+        
+        students = query.all()
+        if not students:
+            raise HTTPException(status_code=404, detail="該当会社の学生がありません。")
+        
+        # 회사별로 하나의 청구서 생성
+        created_invoices = []
+        invoice_list = []
+        total_company_amount = 0
+        all_invoice_items = []
+        
+        # 모든 학생의 월별 항목을 수집
+        for student in students:
+            # 해당 학생의 해당 월 billing_monthly_items 조회
+            monthly_items = db.query(BillingMonthlyItem).filter(
+                BillingMonthlyItem.student_id == student.id,
+                BillingMonthlyItem.year == year,
+                BillingMonthlyItem.month == month
+            ).all()
+            
+            if not monthly_items:
+                continue  # 해당 월에 항목이 없으면 건너뛰기
+            
+            # 총 금액 계산
+            total_amount = sum(float(item.amount) for item in monthly_items)
+            total_company_amount += total_amount
+            
+            # 청구서 항목들 준비 (스냅샷)
+            for item in monthly_items:
+                invoice_item = {
+                    "student_id": student.id,
+                    "item_name": item.item_name,
+                    "amount": item.amount,
+                    "memo": item.memo,
+                    "sort_order": item.sort_order,
+                    "original_item_id": item.id
+                }
+                all_invoice_items.append(invoice_item)
+        
+        # 회사별 총액이 있는 경우에만 청구서 생성
+        if total_company_amount > 0:
+            # 청구서 생성
+            invoice = BillingInvoice(
+                company_id=company.id,
+                year=year,
+                month=month,
+                total_amount=total_company_amount,
+                memo=memo or f"{year}年 {month}月 請求書"
+            )
+            db.add(invoice)
+            db.flush()  # ID 생성
+            
+            # 청구서 항목들 생성
+            invoice_items = []
+            for item_data in all_invoice_items:
+                invoice_item = BillingInvoiceItem(
+                    invoice_id=invoice.id,
+                    student_id=item_data["student_id"],
+                    item_name=item_data["item_name"],
+                    amount=item_data["amount"],
+                    memo=item_data["memo"],
+                    sort_order=item_data["sort_order"],
+                    original_item_id=item_data["original_item_id"]
+                )
+                invoice_items.append(invoice_item)
+            
+            db.add_all(invoice_items)
+            created_invoices.append(invoice)
+            
+            # PDF용 데이터 구성 (학생별로 그룹화)
+            student_invoice_data = {}
+            for item_data in all_invoice_items:
+                student_id = item_data["student_id"]
+                if student_id not in student_invoice_data:
+                    student_invoice_data[student_id] = {
+                        "student_name": next((s.name for s in students if s.id == student_id), "Unknown Student"),
+                        "invoice_items": [],
+                        "total_amount": 0
+                    }
+                
+                amount = int(float(item_data["amount"]))
+                if amount > 0:  # 0원이 아닌 항목만 추가
+                    student_invoice_data[student_id]["invoice_items"].append({
+                        "name": item_data["item_name"] or "Unknown Item",
+                        "unit_price": amount,
+                        "amount": amount,
+                        "memo": item_data["memo"] or ""
+                    })
+                    student_invoice_data[student_id]["total_amount"] += amount
+            
+            # 0원이 아닌 항목이 있는 학생만 추가
+            for student_data in student_invoice_data.values():
+                if student_data["total_amount"] > 0:
+                    invoice_data = {
+                        "student_name": student_data["student_name"],
+                        "invoice_number": str(invoice.id),
+                        "invoice_items": student_data["invoice_items"],
+                        "total_amount": student_data["total_amount"]
+                    }
+                    invoice_list.append(invoice_data)
+        
+        db.commit()
+        
+        # 학생 타입별 청구서 정보 설정
+        def get_invoice_info(student_type):
+            if student_type == "SPECIFIED":
+                return {
+                    "sender_name": "株式会社ワールドワーカー",
+                    "sender_address": "〒546-0003 大阪市東住吉区今川四丁目5番9号",
+                    "sender_tel": "TEL 06-6760-7830",
+                    "sender_fax": "FAX -",
+                    "registration_number": "登録番号 -",
+                    "recipient_name": f"{company.name}　御中",
+                    "recipient_address": company.address or ""
+                }
+            elif student_type == "GENERAL":
+                return {
+                    "sender_name": "大阪医療介護協同組合",
+                    "sender_address": "〒546-0023 大阪府大阪市東住吉区矢田1-26-7-1階",
+                    "sender_tel": "TEL 06-6654-8836",
+                    "sender_fax": "FAX 06-6654-8837",
+                    "registration_number": "登録番号 T6120005018169",
+                    "recipient_name": f"{company.name}　御中",
+                    "recipient_address": company.address or ""
+                }
+            else:  # 기본값 (기존 정보)
+                return {
+                    "sender_name": "大阪医療介護協同組合",
+                    "sender_address": "〒546-0023 大阪府大阪市東住吉区矢田1-26-7-1階",
+                    "sender_tel": "TEL 06-6654-8836",
+                    "sender_fax": "FAX 06-6654-8837",
+                    "registration_number": "登録番号 T6120005018169",
+                    "recipient_name": f"{company.name}　御中",
+                    "recipient_address": company.address or ""
+                }
+        
+        # 작성일 (오늘 날짜)
+        invoice_date = datetime.now().strftime("%Y年%m月%d日")
+        
+        # 입금 기한 (해당 월의 마지막 날)
+        last_day = calendar.monthrange(year, month)[1]
+        payment_deadline = f"{year}年 {month}月 {last_day}日"
+        
+        # 학생 타입별 청구서 정보 가져오기
+        invoice_info = get_invoice_info(student_type)
+        
+        pdf_data = {
+            "total_amount": int(total_company_amount),
+            "invoice_list": invoice_list,
+            "invoice_date": invoice_date,
+            "payment_deadline": payment_deadline,
+            "sender_name": invoice_info["sender_name"],
+            "sender_address": invoice_info["sender_address"],
+            "sender_tel": invoice_info["sender_tel"],
+            "sender_fax": invoice_info["sender_fax"],
+            "registration_number": invoice_info["registration_number"],
+            "recipient_name": invoice_info["recipient_name"],
+            "memo": memo or ""
+        }
+        
+        # HTML 템플릿 렌더링
+        template = templates.get_template("company_invoice.html")
+        html_content = template.render(data=pdf_data)
+        
+        # HTML 내용을 UTF-8로 인코딩하여 PDF 생성
+        try:
+            pdf_bytes = html_to_pdf_bytes(html_content)
+        except UnicodeEncodeError:
+            # 인코딩 에러 발생 시 HTML 내용을 안전하게 처리
+            safe_html_content = html_content.encode('utf-8', errors='ignore').decode('utf-8')
+            pdf_bytes = html_to_pdf_bytes(safe_html_content)
+        
+        # 파일명 생성 (완전히 영어로 변경)
+        filename = f"invoice_{company_id}_{year}_{month}.pdf"
+        
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"}
+        )
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"請求書作成中にエラーが発生しました: {str(e)}")
+
+@app.post("/billing-invoices/generate/excel")
+def generate_company_invoice_excel(
+    company_id: str,
+    year: int,
+    month: int,
+    student_type: Optional[str] = Query(None, description="학생 타입으로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """회사별 청구서 상세 데이터를 엑셀 파일로 다운로드"""
+    try:
+        # 회사 존재 여부 확인
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="会社が見つかりません。")
+        
+        # 해당 회사의 학생들 조회 (학생 타입 필터링)
+        query = db.query(Student).filter(Student.company_id == company_id)
+        if student_type:
+            query = query.filter(Student.student_type == student_type)
+        
+        students = query.all()
+        if not students:
+            raise HTTPException(status_code=404, detail="該当会社の学生がありません。")
+        
+        # 모든 학생의 월별 항목을 수집
+        all_invoice_items = []
+        total_company_amount = 0
+        
+        for student in students:
+            # 해당 학생의 해당 월 billing_monthly_items 조회
+            monthly_items = db.query(BillingMonthlyItem).filter(
+                BillingMonthlyItem.student_id == student.id,
+                BillingMonthlyItem.year == year,
+                BillingMonthlyItem.month == month
+            ).all()
+            
+            if not monthly_items:
+                continue  # 해당 월에 항목이 없으면 건너뛰기
+            
+            # 총 금액 계산
+            total_amount = sum(float(item.amount) for item in monthly_items)
+            total_company_amount += total_amount
+            
+            # 청구서 항목들 준비
+            for item in monthly_items:
+                invoice_item = {
+                    "student_id": student.id,
+                    "student_name": student.name,
+                    "student_type": student.student_type,
+                    "grade_name": student.grade.name if student.grade else None,
+                    "item_name": item.item_name,
+                    "amount": item.amount,
+                    "memo": item.memo,
+                    "sort_order": item.sort_order,
+                    "original_item_id": item.id
+                }
+                all_invoice_items.append(invoice_item)
+        
+        if not all_invoice_items:
+            raise HTTPException(status_code=404, detail="該当月の請求項目がありません。")
+        
+        # 엑셀 데이터 구성 (필요한 컬럼만, 0원 항목 제거)
+        excel_data = []
+        
+        # 헤더 행 추가 (필요한 컬럼만)
+        excel_data.append([
+            "学生名", "項目名", "金額"
+        ])
+        
+        # 학생별로 그룹화하여 데이터 정리
+        student_groups = {}
+        for item in all_invoice_items:
+            student_id = item["student_id"]
+            if student_id not in student_groups:
+                student_groups[student_id] = {
+                    "student_name": item["student_name"],
+                    "items": []
+                }
+            
+            # 0원이 아닌 항목만 추가
+            if float(item["amount"]) > 0:
+                student_groups[student_id]["items"].append({
+                    "item_name": item["item_name"],
+                    "amount": item["amount"]
+                })
+        print(f"엑셀 데이터: {student_groups}")
+        # 그룹화된 데이터를 엑셀 형식으로 변환
+        for student_id, student_data in student_groups.items():
+            if student_data["items"]:  # 항목이 있는 경우만
+                # 첫 번째 행: 학생명과 첫 번째 항목
+                first_item = student_data["items"][0]
+                excel_data.append([
+                    student_data["student_name"],
+                    first_item["item_name"],
+                    first_item["amount"]
+                ])
+                
+                # 나머지 항목들 (학생명은 빈 값으로)
+                for item in student_data["items"][1:]:
+                    excel_data.append([
+                        "",  # 학생명 병합을 위해 빈 값
+                        item["item_name"],
+                        item["amount"]
+                    ])
+        
+        # 요약 행 추가
+        excel_data.append([])  # 빈 행
+        excel_data.append([
+            "合計", "", total_company_amount
+        ])
+        
+                # 엑셀 파일 생성
+        # DataFrame 생성
+        df = pd.DataFrame(excel_data[1:], columns=excel_data[0])
+        
+        # 엑셀 파일 생성
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name="請求詳細", index=False)
+            ws = writer.sheets["請求詳細"]
+            
+            # 열 너비 자동 조정
+            for col in ws.columns:
+                max_len = 0
+                col_letter = col[0].column_letter
+                for cell in col:
+                    v = "" if cell.value is None else str(cell.value)
+                    if len(v) > max_len:
+                        max_len = len(v)
+                ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+            
+            # 학생명 셀 병합
+            current_student_name = None
+            merge_start_row = 2  # 헤더 다음 행부터 시작
+            merge_end_row = 2
+            
+            for row_idx in range(2, len(excel_data) + 1):  # 헤더 제외하고 2행부터
+                student_name = ws.cell(row=row_idx, column=1).value
+                
+                if student_name and student_name != "":  # 학생명이 있는 경우
+                    if current_student_name is not None and merge_start_row < merge_end_row:
+                        # 이전 학생의 셀 병합
+                        ws.merge_cells(f'A{merge_start_row}:A{merge_end_row}')
+                    
+                    # 새로운 학생 시작
+                    current_student_name = student_name
+                    merge_start_row = row_idx
+                    merge_end_row = row_idx
+                else:
+                    # 같은 학생의 추가 항목
+                    merge_end_row = row_idx
+            
+            # 마지막 학생의 셀 병합
+            if current_student_name is not None and merge_start_row < merge_end_row:
+                ws.merge_cells(f'A{merge_start_row}:A{merge_end_row}')
+            
+            # 셀 정렬 설정
+            for row in ws.iter_rows(min_row=2, max_row=len(excel_data), min_col=1, max_col=3):
+                for cell in row:
+                    cell.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center')
+                    
+        output.seek(0)
+
+        # 파일명 생성 (슬래시 등 위험문자 제거 권장)
+        student_type_filter = f"_{student_type}" if student_type else ""
+        display_name = f"請求詳細_{company.name}_{year}年{month}月{student_type_filter}.xlsx"
+        # OS/브라우저 안전용: ASCII 대체 이름
+        ascii_fallback = "invoice_detail.xlsx"
+        # RFC 5987: UTF-8 퍼센트 인코딩
+        filename_star = quote(display_name)
+
+        headers = {
+            # ASCII 대체 + 실제 유니코드 파일명
+            "Content-Disposition": f"attachment; filename={ascii_fallback}; filename*=UTF-8''{filename_star}"
+        }
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=headers,
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"엑셀 파일 생성 중 오류가 발생했습니다: {str(e)}")
+
+@app.get("/billing-invoices/{invoice_id}", response_model=BillingInvoiceResponse)
+def get_billing_invoice(
+    invoice_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """특정 청구서 조회"""
+    try:
+        invoice = db.query(BillingInvoice).options(
+            joinedload(BillingInvoice.items)
+        ).filter(BillingInvoice.id == invoice_id).first()
+        
+        if not invoice:
+            raise HTTPException(status_code=404, detail="請求書が見つかりません。")
+        
+        return invoice
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"請求書照会中にエラーが発生しました: {str(e)}")
+
+@app.get("/billing-invoices/student/{student_id}")
+def get_student_billing_invoices(
+    student_id: str,
+    year: Optional[int] = Query(None, description="년도로 필터링"),
+    month: Optional[int] = Query(None, description="월로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """학생이 속한 회사의 청구서 목록 조회 (해당 학생의 항목만 포함)"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="学生が見つかりません。")
+        
+        # 기본 쿼리 생성 - 해당 학생이 속한 회사의 청구서들
+        query = db.query(BillingInvoice).filter(BillingInvoice.company_id == student.company_id)
+        
+        # 필터링
+        if year is not None:
+            query = query.filter(BillingInvoice.year == year)
+        if month is not None:
+            query = query.filter(BillingInvoice.month == month)
+        
+        # 정렬 (최신순)
+        invoices = query.order_by(BillingInvoice.created_at.desc()).all()
+        
+        # 각 청구서에서 해당 학생의 항목들만 필터링
+        result_invoices = []
+        for invoice in invoices:
+            # 해당 학생의 항목들만 조회
+            student_items = db.query(BillingInvoiceItem).filter(
+                BillingInvoiceItem.invoice_id == invoice.id,
+                BillingInvoiceItem.student_id == student_id
+            ).all()
+            
+            if student_items:  # 해당 학생의 항목이 있는 경우만 포함
+                # invoice 객체에 student_items 추가
+                invoice.student_items = student_items
+                result_invoices.append(invoice)
+        
+        return {
+            "student_id": student_id,
+            "student_name": student.name,
+            "company_id": student.company_id,
+            "invoices": result_invoices
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"請求書一覧照会中にエラーが発生しました: {str(e)}")
+
+@app.delete("/billing-invoices/{invoice_id}")
+def delete_billing_invoice(
+    invoice_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """청구서 삭제"""
+    try:
+        invoice = db.query(BillingInvoice).filter(BillingInvoice.id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="請求書が見つかりません。")
+        
+        db.delete(invoice)
+        db.commit()
+        
+        return {
+            "message": "請求書が正常に削除されました。",
+            "deleted_invoice_id": invoice_id
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"請求書削除中にエラーが発生しました: {str(e)}")
+
+# 노인 식사 기록 관련 API들
+@app.post("/elderly-meal-records", response_model=ElderlyMealRecordResponse)
+def create_elderly_meal_record(
+    meal_record: ElderlyMealRecordCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """노인 식사 건너뛴 기록 등록"""
+    # 거주자 존재 여부 확인
+    resident = db.query(Resident).filter(Resident.id == meal_record.resident_id).first()
+    if not resident:
+        raise HTTPException(status_code=404, detail="거주자를 찾을 수 없습니다")
+
+    # 날짜 형식 검증
+    try:
+        if isinstance(meal_record.skip_date, str):
+            record_date = datetime.strptime(meal_record.skip_date, "%Y-%m-%d").date()
+        else:
+            record_date = meal_record.skip_date
+    except ValueError:
+        raise HTTPException(status_code=400, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)")
+
+    # 이미 같은 날짜, 같은 식사 유형의 기록이 있는지 확인
+    existing_record = db.query(ElderlyMealRecord).filter(
+        ElderlyMealRecord.resident_id == meal_record.resident_id,
+        ElderlyMealRecord.skip_date == record_date,
+        ElderlyMealRecord.meal_type == meal_record.meal_type
+    ).first()
+
+    if existing_record:
+        # 기존 기록이 있으면 삭제 (토글 기능)
+        try:
+            # 삭제 전 값 저장 (로그용)
+            old_values = {
+                "resident_id": str(existing_record.resident_id),
+                "date": str(existing_record.skip_date),
+                "meal_type": existing_record.meal_type
+            }
+            
+            db.delete(existing_record)
+            db.commit()
+            
+            # 로그 생성
+            create_database_log(
+                db=db,
+                table_name="elderly_meal_records",
+                record_id=str(existing_record.id),
+                action="DELETE",
+                user_id=current_user["id"] if current_user else None,
+                old_values=old_values,
+                note="노인 식사 기록 토글 삭제 (취소)"
+            )
+            
+            return {
+                "message": "식사 기록이 취소되었습니다",
+                "action": "cancelled",
+                "id": str(existing_record.id),
+                "resident_id": str(existing_record.resident_id),
+                "skip_date": existing_record.skip_date,
+                "meal_type": existing_record.meal_type,
+                "created_at": existing_record.created_at,
+                "resident": {
+                    "id": str(resident.id),
+                    "resident_type": resident.resident_type,
+                    "elderly": {
+                        "id": str(resident.elderly.id),
+                        "name": resident.elderly.name
+                    } if resident.elderly else None
+                }
+            }
+            
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"식사 기록 취소 중 오류가 발생했습니다: {str(e)}"
+            )
+
+    try:
+        # 새로운 식사 기록 등록
+        new_record = ElderlyMealRecord(
+        id=str(uuid.uuid4()),
+            resident_id=meal_record.resident_id,
+            skip_date=record_date,
+            meal_type=meal_record.meal_type
+        )
+        db.add(new_record)
+        db.commit()
+        db.refresh(new_record)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="elderly_meal_records",
+            record_id=str(new_record.id),
+            action="CREATE",
+            user_id=current_user["id"] if current_user else None,
+            new_values={
+                "resident_id": str(new_record.resident_id),
+                "date": str(new_record.skip_date),
+                "meal_type": new_record.meal_type
+            },
+            note="노인 식사 건너뛴 기록 등록"
+        )
+
+        # 응답 데이터 준비
+        response_data = {
+          "message": "식사 기록이 등록되었습니다",
+          "action": "created",
+          "id": str(new_record.id),
+          "resident_id": str(new_record.resident_id),
+          "skip_date": new_record.skip_date,
+          "meal_type": new_record.meal_type,
+          "created_at": new_record.created_at,
+          "resident": {
+              "id": str(resident.id),
+              "resident_type": resident.resident_type,
+              "elderly": {
+                  "id": str(resident.elderly.id),
+                  "name": resident.elderly.name
+              } if resident.elderly else None
+          }
+        }
+
+        return response_data
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"식사 기록 등록 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@app.get("/elderly-meal-records/monthly/{resident_id}/{year}/{month}")
+def get_elderly_meal_records_monthly(
+    resident_id: str,
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """특정 거주자의 특정 월 식사 건너뛴 기록 조회 (1일~31일)"""
+    # 거주자 존재 여부 확인
+    resident = db.query(Resident).options(
+        joinedload(Resident.elderly)
+    ).filter(Resident.id == resident_id).first()
+    if not resident:
+        raise HTTPException(status_code=404, detail="거주자를 찾을 수 없습니다")
+
+    # 년도, 월 유효성 검사
+    if year < 1900 or year > 2100:
+        raise HTTPException(status_code=400, detail="년도가 올바르지 않습니다")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="월이 올바르지 않습니다")
+
+    try:
+        # 해당 월의 시작일과 종료일 계산
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # 해당 월의 식사 기록 조회
+        records = db.query(ElderlyMealRecord).filter(
+            ElderlyMealRecord.resident_id == resident_id,
+            ElderlyMealRecord.skip_date >= start_date,
+            ElderlyMealRecord.skip_date <= end_date
+        ).order_by(ElderlyMealRecord.skip_date, ElderlyMealRecord.meal_type).all()
+
+        # 1일부터 31일까지의 모든 날짜에 대해 데이터 구성
+        monthly_data = {}
+        for day in range(1, 32):
+            current_date = date(year, month, day)
+            # 해당 월에 실제로 존재하는 날짜인지 확인
+            if current_date.month == month:
+                monthly_data[day] = {
+                    "date": current_date,
+                    "breakfast": False,
+                    "lunch": False,
+                    "dinner": False,
+                    "total_skipped": 0
+                }
+
+        # 조회된 기록을 월별 데이터에 반영
+        for record in records:
+            day = record.date.day
+            if day in monthly_data:
+                monthly_data[day][record.meal_type] = True
+                monthly_data[day]["total_skipped"] += 1
+
+        # 응답 데이터 준비
+        result = []
+        for day, data in monthly_data.items():
+            result.append({
+                "day": day,
+                "date": str(data["date"]),
+                "breakfast": data["breakfast"],
+                "lunch": data["lunch"],
+                "dinner": data["dinner"],
+                "total_skipped": data["total_skipped"]
+            })
+
+        # 월별 통계 계산
+        total_breakfast_skipped = sum(1 for data in monthly_data.values() if data["breakfast"])
+        total_lunch_skipped = sum(1 for data in monthly_data.values() if data["lunch"])
+        total_dinner_skipped = sum(1 for data in monthly_data.values() if data["dinner"])
+        total_days_with_skips = sum(1 for data in monthly_data.values() if data["total_skipped"] > 0)
+
+        return {
+            "resident": {
+                "id": str(resident.id),
+                "resident_type": resident.resident_type,
+                "elderly": {
+                    "id": str(resident.elderly.id),
+                    "name": resident.elderly.name
+                } if resident.elderly else None
+            },
+            "year": year,
+            "month": month,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "daily_records": result,
+            "monthly_statistics": {
+                "total_breakfast_skipped": total_breakfast_skipped,
+                "total_lunch_skipped": total_lunch_skipped,
+                "total_dinner_skipped": total_dinner_skipped,
+                "total_days_with_skips": total_days_with_skips,
+                "total_meals_skipped": total_breakfast_skipped + total_lunch_skipped + total_dinner_skipped
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"월별 식사 기록 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.get("/elderly-meal-records/monthly-all/{year}/{month}")
+def get_all_elderly_meal_records_monthly(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """전체 노인들의 특정 월 식사 건너뛴 기록 조회 (1일~31일)"""
+    # 년도, 월 유효성 검사
+    if year < 1900 or year > 2100:
+        raise HTTPException(status_code=400, detail="년도가 올바르지 않습니다")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="월이 올바르지 않습니다")
+
+    try:
+        # 해당 월의 시작일과 종료일 계산
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # 해당 월의 모든 식사 기록 조회 (노인 거주자만)
+        records = db.query(ElderlyMealRecord).options(
+            joinedload(ElderlyMealRecord.resident).joinedload(Resident.elderly)
+        ).join(Resident).filter(
+            ElderlyMealRecord.skip_date >= start_date,
+            ElderlyMealRecord.skip_date <= end_date,
+            Resident.resident_type == "elderly"
+        ).order_by(ElderlyMealRecord.skip_date, ElderlyMealRecord.meal_type).all()
+
+        # 1일부터 31일까지의 모든 날짜에 대해 데이터 구성
+        monthly_data = {}
+        for day in range(1, 32):
+            current_date = date(year, month, day)
+            # 해당 월에 실제로 존재하는 날짜인지 확인
+            if current_date.month == month:
+                monthly_data[day] = {
+                    "date": current_date,
+                    "breakfast": 0,
+                    "lunch": 0,
+                    "dinner": 0,
+                    "total_skipped": 0,
+                    "residents_skipped": set()  # 해당 날짜에 식사를 건너뛴 거주자들
+                }
+
+        # 조회된 기록을 월별 데이터에 반영
+        for record in records:
+            day = record.date.day
+            if day in monthly_data:
+                monthly_data[day][record.meal_type] += 1
+                monthly_data[day]["total_skipped"] += 1
+                monthly_data[day]["residents_skipped"].add(str(record.resident_id))
+
+        # 응답 데이터 준비
+        result = []
+        for day, data in monthly_data.items():
+            result.append({
+                "day": day,
+                "date": str(data["date"]),
+                "breakfast": data["breakfast"],
+                "lunch": data["lunch"],
+                "dinner": data["dinner"],
+                "total_skipped": data["total_skipped"],
+                "residents_skipped_count": len(data["residents_skipped"])
+            })
+
+        # 월별 통계 계산
+        total_breakfast_skipped = sum(data["breakfast"] for data in monthly_data.values())
+        total_lunch_skipped = sum(data["lunch"] for data in monthly_data.values())
+        total_dinner_skipped = sum(data["dinner"] for data in monthly_data.values())
+        total_meals_skipped = total_breakfast_skipped + total_lunch_skipped + total_dinner_skipped
+        
+        # 전체 노인 거주자 수 조회
+        total_elderly_residents = db.query(Resident).filter(
+            Resident.resident_type == "elderly",
+            Resident.is_active == True
+        ).count()
+
+        # 식사를 건너뛴 노인 수 (중복 제거)
+        all_residents_with_skips = set()
+        for data in monthly_data.values():
+            all_residents_with_skips.update(data["residents_skipped"])
+        
+        total_residents_with_skips = len(all_residents_with_skips)
+
+        return {
+            "year": year,
+            "month": month,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "daily_records": result,
+            "monthly_statistics": {
+                "total_breakfast_skipped": total_breakfast_skipped,
+                "total_lunch_skipped": total_lunch_skipped,
+                "total_dinner_skipped": total_dinner_skipped,
+                "total_meals_skipped": total_meals_skipped,
+                "total_elderly_residents": total_elderly_residents,
+                "total_residents_with_skips": total_residents_with_skips,
+                "average_meals_skipped_per_resident": round(total_meals_skipped / max(total_elderly_residents, 1), 2)
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"전체 월별 식사 기록 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.get("/elderly-meal-records/monthly-summary/{year}/{month}")
+def get_elderly_meal_records_monthly_summary(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """전체 노인들의 특정 월 식사 건너뛴 기록 요약 조회 (거주자별 통계)"""
+    # 년도, 월 유효성 검사
+    if year < 1900 or year > 2100:
+        raise HTTPException(status_code=400, detail="년도가 올바르지 않습니다")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="월이 올바르지 않습니다")
+
+    try:
+        # 해당 월의 시작일과 종료일 계산
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # 해당 월의 모든 식사 기록 조회
+        records = db.query(ElderlyMealRecord).options(
+            joinedload(ElderlyMealRecord.resident).joinedload(Resident.elderly)
+        ).filter(
+            ElderlyMealRecord.skip_date >= start_date,
+            ElderlyMealRecord.skip_date <= end_date
+        ).all()
+
+        # 거주자별로 데이터 그룹화
+        resident_summary = {}
+        for record in records:
+            resident_id = str(record.resident_id)
+            if resident_id not in resident_summary:
+                resident_summary[resident_id] = {
+                    "resident_id": resident_id,
+                    "resident_name": record.resident.elderly.name if record.resident.elderly else "Unknown",
+                    "breakfast_skipped": 0,
+                    "lunch_skipped": 0,
+                    "dinner_skipped": 0,
+                    "total_meals_skipped": 0,
+                    "days_with_skips": set()
+                }
+            
+            resident_summary[resident_id][f"{record.meal_type}_skipped"] += 1
+            resident_summary[resident_id]["total_meals_skipped"] += 1
+            resident_summary[resident_id]["days_with_skips"].add(record.date.day)
+
+        # 응답 데이터 준비
+        result = []
+        total_breakfast_skipped = 0
+        total_lunch_skipped = 0
+        total_dinner_skipped = 0
+        total_residents_with_skips = 0
+
+        for resident_data in resident_summary.values():
+            resident_data["days_with_skips"] = len(resident_data["days_with_skips"])
+            result.append(resident_data)
+            
+            total_breakfast_skipped += resident_data["breakfast_skipped"]
+            total_lunch_skipped += resident_data["lunch_skipped"]
+            total_dinner_skipped += resident_data["dinner_skipped"]
+            
+            if resident_data["total_meals_skipped"] > 0:
+                total_residents_with_skips += 1
+
+        return {
+            "year": year,
+            "month": month,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "resident_summary": result,
+            "overall_statistics": {
+                "total_breakfast_skipped": total_breakfast_skipped,
+                "total_lunch_skipped": total_lunch_skipped,
+                "total_dinner_skipped": total_dinner_skipped,
+                "total_meals_skipped": total_breakfast_skipped + total_lunch_skipped + total_dinner_skipped,
+                "total_residents_with_skips": total_residents_with_skips,
+                "total_residents": len(resident_summary)
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"월별 요약 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.get("/elderly-meal-records/monthly-building/{building_id}/{year}/{month}")
+def get_elderly_meal_records_monthly_by_building(
+    building_id: str,
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """특정 빌딩의 노인 거주자들의 월별 식사 건너뛴 기록 조회"""
+    # 빌딩 존재 여부 확인
+    building = db.query(Building).filter(Building.id == building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
+
+    # 년도, 월 유효성 검사
+    if year < 1900 or year > 2100:
+        raise HTTPException(status_code=400, detail="년도가 올바르지 않습니다")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="월이 올바르지 않습니다")
+
+    try:
+        # 해당 월의 시작일과 종료일 계산
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # 해당 빌딩의 노인 거주자들 조회
+        elderly_residents = db.query(Resident).options(
+            joinedload(Resident.elderly),
+            joinedload(Resident.room).joinedload(Room.building)
+        ).filter(
+            Resident.resident_type == "elderly",
+            Resident.is_active == True,
+            Resident.room.has(Room.building_id == building_id)
+        ).all()
+
+        if not elderly_residents:
+            return {
+                "building": {
+                    "id": str(building.id),
+                    "name": building.name
+                },
+                "year": year,
+                "month": month,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "daily_records": [],
+                "residents": [],
+                "monthly_statistics": {
+                    "total_breakfast_skipped": 0,
+                    "total_lunch_skipped": 0,
+                    "total_dinner_skipped": 0,
+                    "total_meals_skipped": 0,
+                    "total_elderly_residents": 0,
+                    "total_residents_with_skips": 0,
+                    "average_meals_skipped_per_resident": 0
+                }
+            }
+
+        # 해당 월의 식사 기록 조회 (해당 빌딩의 노인 거주자들만)
+        resident_ids = [str(resident.id) for resident in elderly_residents]
+        records = db.query(ElderlyMealRecord).options(
+            joinedload(ElderlyMealRecord.resident).joinedload(Resident.elderly)
+        ).filter(
+            ElderlyMealRecord.skip_date >= start_date,
+            ElderlyMealRecord.skip_date <= end_date,
+            ElderlyMealRecord.resident_id.in_(resident_ids)
+        ).order_by(ElderlyMealRecord.skip_date, ElderlyMealRecord.meal_type).all()
+
+        # 1일부터 31일까지의 모든 날짜에 대해 데이터 구성
+        monthly_data = {}
+        for day in range(1, 32):
+            current_date = date(year, month, day)
+            # 해당 월에 실제로 존재하는 날짜인지 확인
+            if current_date.month == month:
+                monthly_data[day] = {
+                    "date": current_date,
+                    "breakfast": 0,
+                    "lunch": 0,
+                    "dinner": 0,
+                    "total_skipped": 0,
+                    "residents_skipped": set()
+                }
+
+        # 해당 월의 입원 기록 조회 (해당 빌딩의 노인 거주자들만)
+        elderly_ids = [str(resident.elderly.id) for resident in elderly_residents if resident.elderly]
+        hospitalization_records = db.query(ElderlyHospitalization).filter(
+            ElderlyHospitalization.date >= start_date,
+            ElderlyHospitalization.date <= end_date,
+            ElderlyHospitalization.elderly_id.in_(elderly_ids)
+        ).order_by(ElderlyHospitalization.date).all()
+
+        # 조회된 기록을 월별 데이터에 반영
+        for record in records:
+            day = record.skip_date.day
+            if day in monthly_data:
+                monthly_data[day][record.meal_type] += 1
+                monthly_data[day]["total_skipped"] += 1
+                monthly_data[day]["residents_skipped"].add(str(record.resident_id))
+
+        # 응답 데이터 준비
+        daily_records = []
+        for day, data in monthly_data.items():
+            daily_record = {
+                "day": day,
+                "date": str(data["date"]),
+                "breakfast": data["breakfast"],
+                "lunch": data["lunch"],
+                "dinner": data["dinner"],
+                "total_skipped": data["total_skipped"],
+                "residents_skipped_count": len(data["residents_skipped"])
+            }
+            daily_records.append(daily_record)
+
+        # 거주자별 개별 통계 및 일별 상세 데이터 계산
+        residents_data = []
+        for resident in elderly_residents:
+            resident_records = [r for r in records if str(r.resident_id) == str(resident.id)]
+            
+            # 거주자별 일별 데이터 구성 (1일~31일)
+            resident_daily_data = {}
+            for day in range(1, 32):
+                current_date = date(year, month, day)
+                if current_date.month == month:
+                    resident_daily_data[day] = {
+                        "day": day,
+                        "date": str(current_date),
+                        "breakfast": False,
+                        "lunch": False,
+                        "dinner": False,
+                        "total_skipped": 0
+                    }
+            
+            # 해당 거주자의 기록을 일별 데이터에 반영
+            for record in resident_records:
+                day = record.skip_date.day
+                if day in resident_daily_data:
+                    resident_daily_data[day][record.meal_type] = True
+                    resident_daily_data[day]["total_skipped"] += 1
+            
+            # 일별 데이터를 배열로 변환
+            daily_records_array = []
+            for day, data in resident_daily_data.items():
+                daily_records_array.append(data)
+            
+            # 거주자별 통계 계산
+            breakfast_skipped = len([r for r in resident_records if r.meal_type == "breakfast"])
+            lunch_skipped = len([r for r in resident_records if r.meal_type == "lunch"])
+            dinner_skipped = len([r for r in resident_records if r.meal_type == "dinner"])
+            total_skipped = breakfast_skipped + lunch_skipped + dinner_skipped
+            
+            # 해당 거주자의 입원 기록 조회
+            resident_hospitalizations = []
+            if resident.elderly:
+                resident_hospitalizations = [h for h in hospitalization_records if str(h.elderly_id) == str(resident.elderly.id)]
+            
+            residents_data.append({
+                "resident_id": str(resident.id),
+                "resident_name": resident.elderly.name if resident.elderly else "Unknown",
+                "room_number": resident.room.room_number if resident.room else None,
+                "breakfast_skipped": breakfast_skipped,
+                "lunch_skipped": lunch_skipped,
+                "dinner_skipped": dinner_skipped,
+                "total_skipped": total_skipped,
+                "days_with_skips": len(set(r.skip_date.day for r in resident_records)),
+                "daily_records": daily_records_array,  # 1일~31일 상세 데이터
+                "hospitalizations": [
+                    {
+                        "elderly_id": str(h.elderly_id),
+                        "hospitalization_type": h.hospitalization_type,
+                        "hospital_name": h.hospital_name,
+                        "last_meal_date": h.last_meal_date,
+                        "last_meal_type": h.last_meal_type,
+                        "meal_resume_date": h.meal_resume_date,
+                        "meal_resume_type": h.meal_resume_type,
+                        "note": h.note
+                    } for h in resident_hospitalizations
+                ]
+            })
+
+        # 월별 통계 계산
+        total_breakfast_skipped = sum(data["breakfast"] for data in monthly_data.values())
+        total_lunch_skipped = sum(data["lunch"] for data in monthly_data.values())
+        total_dinner_skipped = sum(data["dinner"] for data in monthly_data.values())
+        total_meals_skipped = total_breakfast_skipped + total_lunch_skipped + total_dinner_skipped
+        
+        # 식사를 건너뛴 노인 수 (중복 제거)
+        all_residents_with_skips = set()
+        for data in monthly_data.values():
+            all_residents_with_skips.update(data["residents_skipped"])
+        
+        total_residents_with_skips = len(all_residents_with_skips)
+        total_elderly_residents = len(elderly_residents)
+
+        return {
+            "building": {
+                "id": str(building.id),
+                "name": building.name
+            },
+            "year": year,
+            "month": month,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "daily_records": daily_records,
+            "residents": residents_data,
+            "monthly_statistics": {
+                "total_breakfast_skipped": total_breakfast_skipped,
+                "total_lunch_skipped": total_lunch_skipped,
+                "total_dinner_skipped": total_dinner_skipped,
+                "total_meals_skipped": total_meals_skipped,
+                "total_elderly_residents": total_elderly_residents,
+                "total_residents_with_skips": total_residents_with_skips,
+                "average_meals_skipped_per_resident": round(total_meals_skipped / max(total_elderly_residents, 1), 2)
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"빌딩별 월별 식사 기록 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.post("/elderly-hospitalizations")
+def create_elderly_hospitalization(
+    hospitalization_data: ElderlyHospitalizationCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """거주자 입원/퇴원 기록을 생성합니다."""
+    try:
+        # 노인 존재 여부 확인
+        elderly = db.query(Elderly).filter(Elderly.id == hospitalization_data.elderly_id).first()
+        if not elderly:
+            raise HTTPException(status_code=404, detail="노인을 찾을 수 없습니다")
+        
+        # 퇴원 등록인 경우 기존 입원 기록 찾기
+        if hospitalization_data.hospitalization_type == "discharge":
+            existing_hospitalization = db.query(ElderlyHospitalization).filter(
+                ElderlyHospitalization.elderly_id == hospitalization_data.elderly_id,
+                ElderlyHospitalization.hospitalization_type == "admission",
+                ElderlyHospitalization.meal_resume_date.is_(None)  # 퇴원 기록이 없는 입원 기록
+            ).order_by(ElderlyHospitalization.date.desc()).first()
+            
+            if existing_hospitalization:
+                # 기존 입원 기록 업데이트
+                existing_hospitalization.hospitalization_type = "discharge"
+                existing_hospitalization.meal_resume_date = hospitalization_data.meal_resume_date
+                existing_hospitalization.meal_resume_type = hospitalization_data.meal_resume_type
+                existing_hospitalization.note = hospitalization_data.note
+                
+                db.commit()
+                db.refresh(existing_hospitalization)
+                
+                return {
+                    "message": f"퇴원 기록이 기존 입원 기록에 업데이트되었습니다.",
+                    "item": {
+                        "id": str(existing_hospitalization.id),
+                        "elderly_id": str(existing_hospitalization.elderly_id),
+                        "hospitalization_type": existing_hospitalization.hospitalization_type,
+                        "hospital_name": existing_hospitalization.hospital_name,
+                        "date": existing_hospitalization.date,
+                        "meal_resume_date": existing_hospitalization.meal_resume_date,
+                        "meal_resume_type": existing_hospitalization.meal_resume_type
+                    }
+                }
+            else:
+                raise HTTPException(status_code=404, detail="해당 노인의 미완료 입원 기록을 찾을 수 없습니다")
+        
+        # 입원 기록 생성 (기존 로직)
+        hospitalization = ElderlyHospitalization(
+            elderly_id=hospitalization_data.elderly_id,
+            hospitalization_type=hospitalization_data.hospitalization_type,
+            hospital_name=hospitalization_data.hospital_name,
+            date=hospitalization_data.date,
+            last_meal_date=hospitalization_data.last_meal_date,
+            last_meal_type=hospitalization_data.last_meal_type,
+            meal_resume_date=hospitalization_data.meal_resume_date,
+            meal_resume_type=hospitalization_data.meal_resume_type,
+            note=hospitalization_data.note,
+            created_by=current_user.get("name", "Unknown")
+        )
+        
+        db.add(hospitalization)
+        db.commit()
+        db.refresh(hospitalization)
+        
+        return {
+            "message": f"입원 기록이 정상적으로 생성되었습니다.",
+            "item": {
+              "id": str(hospitalization.id),
+              "elderly_id": str(hospitalization.elderly_id),
+              "hospitalization_type": hospitalization.hospitalization_type,
+              "hospital_name": hospitalization.hospital_name,
+              "date": hospitalization.date
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"입원/퇴원 기록 생성 중 오류가 발생했습니다: {str(e)}")
+
+@app.get("/elderly-hospitalizations/{year}/{month}")
+def get_elderly_hospitalizations_by_month(
+    year: int,
+    month: int,
+    elderly_id: Optional[str] = Query(None, description="특정 고령자 ID로 필터링"),
+    hospitalization_type: Optional[str] = Query(None, description="입원/퇴원 유형으로 필터링 (admission 또는 discharge)"),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """특정 연도와 달의 병원 입퇴원 기록을 조회합니다."""
+    try:
+        # 연도와 달 유효성 검사
+        if year < 1900 or year > 2100:
+            raise HTTPException(status_code=400, detail="유효하지 않은 연도입니다")
+        if month < 1 or month > 12:
+            raise HTTPException(status_code=400, detail="유효하지 않은 월입니다")
+        
+        # 해당 월의 시작일과 종료일 계산
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # 기본 쿼리 생성
+        query = db.query(ElderlyHospitalization).filter(
+            ElderlyHospitalization.date >= start_date,
+            ElderlyHospitalization.date <= end_date
+        )
+        
+        # 필터링 조건 추가
+        if elderly_id:
+            query = query.filter(ElderlyHospitalization.elderly_id == elderly_id)
+        
+        if hospitalization_type:
+            query = query.filter(ElderlyHospitalization.hospitalization_type == hospitalization_type)
+        
+        # 총 개수 계산
+        total_count = query.count()
+        
+        # 페이지네이션 적용
+        offset = (page - 1) * page_size
+        hospitalizations = query.order_by(ElderlyHospitalization.date.desc()).offset(offset).limit(page_size).all()
+        
+        # 응답 데이터 구성
+        hospitalization_data = []
+        for hospitalization in hospitalizations:
+            # 고령자 정보 조회
+            elderly = db.query(Elderly).filter(Elderly.id == hospitalization.elderly_id).first()
+            
+            hospitalization_dict = {
+                "id": str(hospitalization.id),
+                "elderly_id": str(hospitalization.elderly_id),
+                "elderly_name": elderly.name if elderly else "Unknown",
+                "elderly_name_katakana": elderly.name_katakana if elderly else None,
+                "hospitalization_type": hospitalization.hospitalization_type,
+                "hospital_name": hospitalization.hospital_name,
+                "date": hospitalization.date,
+                "last_meal_date": hospitalization.last_meal_date,
+                "last_meal_type": hospitalization.last_meal_type,
+                "meal_resume_date": hospitalization.meal_resume_date,
+                "meal_resume_type": hospitalization.meal_resume_type,
+                "note": hospitalization.note,
+                "created_at": hospitalization.created_at,
+                "created_by": hospitalization.created_by,
+                "elderly": {
+                    "id": str(elderly.id),
+                    "name": elderly.name,
+                    "name_katakana": elderly.name_katakana,
+                    "gender": elderly.gender,
+                    "care_level": elderly.care_level,
+                    "current_room": {
+                        "id": str(elderly.current_room.id),
+                        "room_number": elderly.current_room.room_number,
+                        "building": {
+                            "id": str(elderly.current_room.building.id),
+                            "name": elderly.current_room.building.name
+                        } if elderly.current_room and elderly.current_room.building else None
+                    } if elderly.current_room else None
+                } if elderly else None
+            }
+            hospitalization_data.append(hospitalization_dict)
+        
+        # 월별 통계 계산
+        admission_count = len([h for h in hospitalizations if h.hospitalization_type == 'admission'])
+        discharge_count = len([h for h in hospitalizations if h.hospitalization_type == 'discharge'])
+        unique_elderly_count = len(set(h.elderly_id for h in hospitalizations))
+        
+        return {
+            "year": year,
+            "month": month,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "items": hospitalization_data,
+            "total": total_count,
+            "total_pages": (total_count + page_size - 1) // page_size,
+            "current_page": page,
+            "page_size": page_size,
+            "statistics": {
+                "total_hospitalizations": len(hospitalizations),
+                "admission_count": admission_count,
+                "discharge_count": discharge_count,
+                "unique_elderly_count": unique_elderly_count
+            }
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"병원 입퇴원 기록 조회 중 오류가 발생했습니다: {str(e)}")

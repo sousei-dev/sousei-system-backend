@@ -68,27 +68,84 @@
     .not-under-border-line {
       border-bottom: none;
     }
+    /* 청구 상세 디자인 - 심플 버전 */
+    .page {
+      page-break-before: always;
+      padding: 20px;
+      background: white;
+      min-height: 100vh;
+    }
+    .page h2 {
+      text-align: center;
+      font-size: 20pt;
+      margin-bottom: 25px;
+      border-bottom: 1px solid #000;
+      padding-bottom: 8px;
+    }
+    .student-section {
+      background: white;
+      border: 1px solid #000;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .student-section h3 {
+      margin: 0;
+      padding: 15px 20px;
+      font-size: 12pt;
+      font-weight: bold;
+      border-bottom: 2px solid #000;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+    .student-section table {
+      margin: 0;
+      border-collapse: collapse;
+      width: 100%;
+    }
+    .student-section th {
+      padding: 10px 8px;
+      text-align: center;
+      font-weight: bold;
+      font-size: 9pt;
+      border: 1px solid #000;
+    }
+    .student-section td {
+      padding: 8px;
+      text-align: center;
+      border: 1px solid #000;
+      font-size: 7pt;
+    }
+    .amount-cell {
+      font-weight: bold;
+    }
+    .memo-cell {
+      text-align: left;
+    }
   </style>
 </head>
 <body>
 
 <div class="header line-height">
   <div>
-    〒546-0003<br>
-    大阪市東住吉区今川4-5-9-201
+    {{ data.recipient_address }}
   </div>
   <div class="right-text line-height">
-    大阪医療介護協同組合<br>
-    〒546-0003 大阪市東住吉区今川4-5-9-201<br>
-    TEL 06-6654-8836　FAX 06-6654-8876<br>
-    登録番号 T6120005018169
+    {{ data.sender_name }}<br>
+    {{ data.sender_address }}<br>
+    {{ data.sender_tel }}　{{ data.sender_fax }}<br>
+    {{ data.registration_number }}
   </div>
 </div>
-  <div style="display: inline-block; border-bottom: 2px solid #000; padding-bottom: 4px;">
-  　　　株式会社 ミシマ　御中　　　　　　　　　
+<div style="display: inline-block; border-bottom: 2px solid #000; padding-bottom: 4px;">
+　　　{{ data.recipient_name }}　　　　　　　　　
 </div>
+{% if data.recipient_address %}
+<div style="margin-top: 5px;">
+  {{ data.recipient_address }}
+</div>
+{% endif %}
 <div class="title">請 求 書</div>
-<div class="right-text">2025年2月20日</div>
+<div class="right-text">{{ data.invoice_date }}</div>
 
 <div class="notice">
   いつもお世話になっております。<br>
@@ -100,46 +157,34 @@
     <th>請求の項目</th>
     <th>単価</th>
     <th>数量</th>
-    <th>税率</th>
-    <th>消費税額</th>
-    <th>税抜金額</th>
+    <th>金額</th>
   </tr>
   <tr>
     <td style="border-bottom: none; border-top: none; text-align: left">請求名</td>
     <td style="border-bottom: none; border-top: none;" class="right">{{ "{:,}".format(data.total_amount) }}</td>
     <td style="border-bottom: none; border-top: none" class="right">1</td>
-    <td style="border-bottom: none; border-top: none">10%</td>
-    <td style="border-bottom: none; border-top: none" class="right">{{ "{:,}".format(data.vat) }}</td>
-    <td style="border-bottom: none; border-top: none" class="right">{{ "{:,}".format(data.vat_total_amount) }}</td>
+    <td style="border-bottom: none; border-top: none" class="right">{{ "{:,}".format(data.total_amount) }}</td>
   </tr>
   <tr>
-    <td colspan="5" class="right">小計</td>
-    <td class="right">{{ "{:,}".format(data.total_amount) }}</td>
-  </tr>
-  <tr>
-    <td colspan="5" class="right">消費税額 10%</td>
-    <td class="right">{{ "{:,}".format(data.vat) }}</td>
-  </tr>
-  <tr>
-    <td colspan="5" class="left" style="
-    min-height: 100px;
-    height: 100px;
-    align-content: flex-start;
-">
-      【実習費等・その他】<br>
-      別紙(実習経費明細書)参照
+    <td colspan="3" class="left" style="
+      min-height: 100px;
+      height: 100px;
+      align-content: flex-start;
+    ">
+      【その他】<br>
+      {{ data.memo|replace('\n', '<br>')|safe }}
     </td>
     <td class="right"></td>
   </tr>
   <tr>
-    <td colspan="5" class="right bold" style="
+    <td colspan="3" class="right bold" style="
       border-bottom: none;
       border-left:  none;
       padding: 0px;
     ">
       <span style="padding: 6px 35px 6px 20px; background: #d7d4d4;border-bottom: 1px solid black;border-left: 1px solid black;">ご請求金額</span>
     </td>
-    <td class="right bold" style="background: #d7d4d4">{{ "{:,}".format(data.vat_total_amount) }}</td>
+    <td class="right bold" style="background: #d7d4d4">{{ "{:,}".format(data.total_amount) }}</td>
   </tr>
 </table>
 
@@ -153,33 +198,32 @@
   </div>
 </div>
 
-<p style="margin-top: 30px;">お振込み期限：　2025年 3月 31日</p>
-
-<p class="right">2025年2月20日</p>
+<p style="margin-top: 30px;">お振込み期限：　{{ data.payment_deadline }}</p>
 
 <div style="page-break-before: always;" class="page">
-  <h2>청구 상세 내역</h2>
-  {% for invoice in data.invoice_list %}
-  <div class="student-section">
-      <h3>{{ invoice.student_name }} ({{ invoice.invoice_number }})</h3>
-      <table>
-          <tr>
-              <th>請求の項目</th>
-              <th>単価</th>
-              <th>税抜金額</th>
-              <th>備考</th>
-          </tr>
-          {% for item in invoice.invoice_items %}
-          <tr>
-              <td>{{ item.name }}</td>
-              <td>{{ item.unit_price }}</td>
-              <td>{{ item.amount }}</td>
-              <td>{{ item.memo }}</td>
-          </tr>
-          {% endfor %}
-      </table>
-  </div>
-  {% endfor %}
+  <h2>請求詳細</h2>
+  <table>
+    <tr>
+      <th>名前</th>
+      <th>請求の項目</th>
+      <th>単価</th>
+    </tr>
+    {% for invoice in data.invoice_list %}
+      {% for item in invoice.invoice_items %}
+      <tr>
+        {% if loop.first %}
+        <td rowspan="{{ invoice.invoice_items|length }}">{{ invoice.student_name|default('Unknown Student') }}</td>
+        {% endif %}
+        <td>{{ item.name|default('Unknown Item') }}</td>
+        <td class="amount-cell">{{ "{:,}".format(item.unit_price|int) }}</td>
+      </tr>
+      {% endfor %}
+      <tr style="font-weight: bold;">
+        <td colspan="2" style="text-align: right;">{{ invoice.student_name|default('Unknown Student') }} 合計</td>
+        <td class="amount-cell">{{ "{:,}".format(invoice.total_amount|int) }}</td>
+      </tr>
+    {% endfor %}
+  </table>
 </div>
 
 </body>

@@ -66,14 +66,14 @@ class Student(Base):
     grade = relationship("Grade", back_populates="students")
     invoices = relationship("Invoice", back_populates="student", cascade="all, delete-orphan")
     current_room = relationship("Room", back_populates="current_residents")
-    residences = relationship("Resident", back_populates="student")
-    residence_card_histories = relationship("ResidenceCardHistory", foreign_keys="ResidenceCardHistory.student_id", cascade="all, delete-orphan")
+    residence_card_histories = relationship("ResidenceCardHistory", back_populates="student", cascade="all, delete-orphan")
 
 class Company(Base):
     __tablename__ = "companies"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String)
+    address = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Student와의 관계 설정
@@ -178,8 +178,8 @@ class Resident(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False)
-    resident_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
-    resident_type = Column(Text, nullable=True)  # 거주자 유형 (예: 'student', 'guest', 'family' 등)
+    resident_id = Column(UUID(as_uuid=True), nullable=False)  # student.id 또는 elderly.id
+    resident_type = Column(Text, nullable=False)  # 거주자 유형 ('student' 또는 'elderly')
     check_in_date = Column(Date, nullable=False)
     check_out_date = Column(Date)
     is_active = Column(Boolean, default=True)
@@ -189,7 +189,14 @@ class Resident(Base):
 
     # 관계 설정
     room = relationship("Room", back_populates="residents")
-    student = relationship("Student", back_populates="residences", foreign_keys=[resident_id])
+    student = relationship("Student", 
+                         foreign_keys=[resident_id],
+                         primaryjoin="and_(Resident.resident_id == Student.id, Resident.resident_type == 'student')",
+                         viewonly=True)
+    elderly = relationship("Elderly", 
+                         foreign_keys=[resident_id],
+                         primaryjoin="and_(Resident.resident_id == Elderly.id, Resident.resident_type == 'elderly')",
+                         viewonly=True)
 
     __table_args__ = (
         UniqueConstraint('room_id', 'resident_id', 'is_active', name='unique_active_resident_per_room'),
@@ -304,7 +311,7 @@ class ResidenceCardHistory(Base):
     note = Column(String)
 
     # 관계 설정
-    student = relationship("Student", foreign_keys=[student_id])
+    student = relationship("Student", back_populates="residence_card_histories")
 
 class DatabaseLog(Base):
     __tablename__ = "database_logs"
@@ -346,6 +353,8 @@ class Elderly(Base):
     # 관계 설정
     current_room = relationship("Room", foreign_keys=[current_room_id])
     category = relationship("ElderlyCategories", foreign_keys=[categories_id])
+    hospitalizations = relationship("ElderlyHospitalization", foreign_keys="ElderlyHospitalization.elderly_id", cascade="all, delete-orphan")
+
 
 
 class ElderlyCategories(Base):
@@ -461,3 +470,75 @@ class BillingMonthlyItem(Base):
 
     # 관계 설정
     student = relationship("Student", foreign_keys=[student_id])
+
+class BillingInvoice(Base):
+    __tablename__ = "billing_invoices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    invoice_date = Column(Date, nullable=False, default=datetime.now().date)
+    total_amount = Column(Numeric, nullable=False)
+    memo = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계 설정
+    company = relationship("Company", foreign_keys=[company_id])
+    items = relationship("BillingInvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+
+class BillingInvoiceItem(Base):
+    __tablename__ = "billing_invoice_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    invoice_id = Column(UUID(as_uuid=True), ForeignKey("billing_invoices.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    item_name = Column(String, nullable=False)
+    amount = Column(Numeric, nullable=False)
+    memo = Column(String, nullable=True)
+    sort_order = Column(Integer, default=0)
+    original_item_id = Column(UUID(as_uuid=True), ForeignKey("billing_monthly_items.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계 설정
+    invoice = relationship("BillingInvoice", back_populates="items")
+    original_item = relationship("BillingMonthlyItem", foreign_keys=[original_item_id])
+
+class ElderlyMealRecord(Base):
+    __tablename__ = "elderly_meal_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    resident_id = Column(UUID(as_uuid=True), ForeignKey("residents.id", ondelete="CASCADE"), nullable=False)
+    skip_date = Column(Date, nullable=False)
+    meal_type = Column(String, nullable=False)  # 'breakfast', 'lunch', 'dinner'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계 설정
+    resident = relationship("Resident", foreign_keys=[resident_id])
+
+    __table_args__ = (
+        UniqueConstraint('resident_id', 'skip_date', 'meal_type', name='unique_skip_per_meal_per_day'),
+    )
+
+class ElderlyHospitalization(Base):
+    __tablename__ = "elderly_hospitalizations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    elderly_id = Column(UUID(as_uuid=True), ForeignKey("elderly.id", ondelete="CASCADE"), nullable=False)
+    hospitalization_type = Column(String, nullable=False)  # 'admission' 또는 'discharge'
+    hospital_name = Column(String, nullable=False)
+    date = Column(Date, nullable=False)  # 입원일 또는 퇴원일
+    last_meal_date = Column(Date, nullable=True)  # 최종식사일 (입원시에만)
+    last_meal_type = Column(String, nullable=True)  # 최종식사 유형 (breakfast, lunch, dinner)
+    meal_resume_date = Column(Date, nullable=True)  # 식사재개일 (퇴원시에만)
+    meal_resume_type = Column(String, nullable=True)  # 식사재개 유형 (breakfast, lunch, dinner)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String, nullable=True)  # 기록 작성자
+
+    # 관계 설정
+    elderly = relationship("Elderly", foreign_keys=[elderly_id])
+
+    __table_args__ = (
+        UniqueConstraint('elderly_id', 'hospitalization_type', 'date', name='unique_hospitalization_per_day'),
+    )

@@ -896,3 +896,144 @@ class BillingMonthlyItemResponse(BaseModel):
         json_encoders = {
             UUID: str
         }
+
+# Billing Invoice 스키마
+class BillingInvoiceItemCreate(BaseModel):
+    item_name: str = Field(..., description="항목 이름")
+    amount: float = Field(..., description="금액")
+    memo: Optional[str] = Field(None, description="메모")
+    sort_order: int = Field(0, description="정렬 순서")
+    original_item_id: Optional[str] = Field(None, description="원본 항목 ID")
+
+class BillingInvoiceItemResponse(BaseModel):
+    id: str
+    invoice_id: str
+    item_name: str
+    amount: float
+    memo: Optional[str] = None
+    sort_order: int
+    original_item_id: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class BillingInvoiceCreate(BaseModel):
+    student_id: str = Field(..., description="학생 ID")
+    year: int = Field(..., description="년도")
+    month: int = Field(..., description="월")
+    total_amount: float = Field(..., description="총 금액")
+    memo: Optional[str] = Field(None, description="메모")
+    items: List[BillingInvoiceItemCreate] = Field(..., description="청구서 항목들")
+
+class BillingInvoiceResponse(BaseModel):
+    id: str
+    student_id: str
+    year: int
+    month: int
+    invoice_date: date
+    total_amount: float
+    memo: Optional[str] = None
+    created_at: datetime
+    items: List[BillingInvoiceItemResponse] = []
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class ElderlyMealRecordCreate(BaseModel):
+    resident_id: str = Field(..., description="거주자 ID")
+    skip_date: Union[date, str] = Field(..., description="식사 건너뛴 날짜 (YYYY-MM-DD)")
+    meal_type: str = Field(..., description="식사 유형 (breakfast, lunch, dinner)")
+
+    @field_validator('skip_date', mode='before')
+    @classmethod
+    def validate_date_field(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator('meal_type')
+    @classmethod
+    def validate_meal_type(cls, v):
+        if v not in ['breakfast', 'lunch', 'dinner']:
+            raise ValueError('meal_type must be one of: breakfast, lunch, dinner')
+        return v
+
+class ElderlyMealRecordUpdate(BaseModel):
+    skip_date: Optional[date] = Field(None, description="식사 건너뛴 날짜 (YYYY-MM-DD)")
+    meal_type: Optional[str] = Field(None, description="식사 유형 (breakfast, lunch, dinner)")
+
+    @field_validator('skip_date', mode='before')
+    @classmethod
+    def validate_date_field(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator('meal_type')
+    @classmethod
+    def validate_meal_type(cls, v):
+        if v is not None and v not in ['breakfast', 'lunch', 'dinner']:
+            raise ValueError('meal_type must be one of: breakfast, lunch, dinner')
+        return v
+
+class ElderlyMealRecordResponse(BaseModel):
+    id: str
+    resident_id: str
+    skip_date: date
+    meal_type: str
+    created_at: datetime
+    resident: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
+
+class ElderlyHospitalizationCreate(BaseModel):
+    elderly_id: str
+    hospitalization_type: str  # 'admission' 또는 'discharge'
+    hospital_name: str
+    date: date
+    last_meal_date: Optional[date] = None
+    last_meal_type: Optional[str] = None  # 'breakfast', 'lunch', 'dinner'
+    meal_resume_date: Optional[date] = None
+    meal_resume_type: Optional[str] = None  # 'breakfast', 'lunch', 'dinner'
+    note: Optional[str] = None
+
+class ElderlyHospitalizationUpdate(BaseModel):
+    hospital_name: Optional[str] = None
+    date: Optional[date] = None
+    last_meal_date: Optional[date] = None
+    last_meal_type: Optional[str] = None
+    meal_resume_date: Optional[date] = None
+    meal_resume_type: Optional[str] = None
+    note: Optional[str] = None
+
+class ElderlyHospitalizationResponse(BaseModel):
+    id: str
+    resident_id: str
+    hospitalization_type: str
+    hospital_name: str
+    date: date
+    last_meal_date: Optional[date] = None
+    last_meal_type: Optional[str] = None
+    meal_resume_date: Optional[date] = None
+    meal_resume_type: Optional[str] = None
+    note: Optional[str] = None
+    created_at: datetime
+    created_by: Optional[str] = None
+    resident: Optional[dict] = None
+
+class ElderlyHospitalizationStatusResponse(BaseModel):
+    resident_id: str
+    resident_name: str
+    hospitalization_status: str  # '正常' 또는 '入院中'
+    latest_hospitalization: Optional[dict] = None
