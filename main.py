@@ -3592,7 +3592,7 @@ def change_student_residence(
     student_id: str,
     request: ChangeResidenceRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 학생 존재 여부 확인
     student = db.query(Student).filter(Student.id == student_id).first()
@@ -3706,7 +3706,7 @@ def change_student_residence(
             new_residence = Resident(
                 id=str(uuid.uuid4()),
                 room_id=request.new_room_id,
-                student_id=student_id,
+                resident_id=student_id,
                 check_in_date=check_in_date,
                 note=f"이사로 인한 입주 - {request.note}" if request.note else "이사로 인한 입주"
             )
@@ -3734,7 +3734,7 @@ def change_student_residence(
                 table_name="residents",
                 record_id=str(current_residence.id),
                 action="UPDATE",
-                user_id=current_user.id if current_user else None,
+                user_id=current_user["id"] if current_user else None,
                 old_values={
                     "room_id": str(current_residence.room_id),
                     "student_id": str(current_residence.resident_id),
