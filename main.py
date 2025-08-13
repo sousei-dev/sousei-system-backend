@@ -7671,7 +7671,7 @@ def get_student_monthly_items(
             query = query.filter(BillingMonthlyItem.month == month)
         
         # 정렬 (생성일 기준 내림차순, 년도, 월, 정렬 순서)
-        items = query.order_by(BillingMonthlyItem.created_at.asc(), BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).order_by(BillingMonthlyItem.sort_order).all()
+        items = query.order_by(BillingMonthlyItem.sort_order.asc(), BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).all()
         
         # 항목 이름별로 그룹화
         grouped_items = {}
@@ -7753,6 +7753,15 @@ def create_student_monthly_items(
         if existing_items:
             raise HTTPException(status_code=400, detail=f"{target_year}年に既に同じ項目名が存在します。")
         
+        # 기존 항목들 중 가장 큰 sort_order 값 찾기
+        max_sort_order = db.query(func.max(BillingMonthlyItem.sort_order)).filter(
+            BillingMonthlyItem.student_id == student_id,
+            BillingMonthlyItem.year == target_year
+        ).scalar()
+        
+        # 새로운 sort_order 값 설정 (기존 최대값 + 1, 없으면 1)
+        new_sort_order = (max_sort_order or 0) + 1
+        
         # 1~12월까지 항목 생성
         items_to_create = []
         for month in range(1, 13):  # 1~12월
@@ -7763,7 +7772,7 @@ def create_student_monthly_items(
                 item_name=item_data.item_name,
                 amount=0,
                 memo=item_data.memo,
-                sort_order=0
+                sort_order=new_sort_order
             )
             items_to_create.append(new_item)
         
