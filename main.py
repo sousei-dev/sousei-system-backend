@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, engine
 from models import Base, User, Company, Student, Grade, Invoice, InvoiceItem, BillingItem, Building, Room, Resident, RoomLog, RoomCharge, ChargeItem, ChargeItemAllocation, RoomUtility, ResidenceCardHistory, DatabaseLog, Elderly, ElderlyCategories, BuildingCategoriesRent, ElderlyContract, ElderlyInvoiceItem, ElderlyInvoice, CareItem, CareMealPrice, CareUtilityPrice, BillingMonthlyItem, BillingInvoice, BillingInvoiceItem, ElderlyMealRecord, ElderlyHospitalization
-from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse, BillingMonthlyItemCreate, BillingMonthlyItemUpdate, BillingMonthlyItemResponse, BillingInvoiceCreate, BillingInvoiceResponse, BillingInvoiceItemCreate, BillingInvoiceItemResponse, ElderlyMealRecordCreate, ElderlyMealRecordUpdate, ElderlyMealRecordResponse, ElderlyHospitalizationCreate, ElderlyHospitalizationResponse
+from schemas import UserCreate, UserLogin, StudentUpdate, StudentResponse, InvoiceCreate, InvoiceResponse, StudentCreate, InvoiceUpdate, BuildingCreate, BuildingUpdate, BuildingResponse, RoomCreate, RoomUpdate, RoomResponse, ChangeResidenceRequest, CheckInRequest, CheckOutRequest, AssignRoomRequest, NewResidenceRequest, RoomLogResponse, ResidentResponse, RoomCapacityStatus, EmptyRoomOption, BuildingOption, AvailableRoom, RoomChargeCreate, RoomChargeUpdate, RoomChargeResponse, ChargeItemCreate, ChargeItemUpdate, ChargeItemResponse, ChargeItemAllocationCreate, ChargeItemAllocationUpdate, ChargeItemAllocationResponse, RoomUtilityCreate, RoomUtilityUpdate, RoomUtilityResponse, ResidenceCardHistoryCreate, ResidenceCardHistoryUpdate, ResidenceCardHistoryResponse, VisaInfoUpdate, ElderlyCreate, ElderlyUpdate, ElderlyResponse, ElderlyContractCreate, ElderlyContractUpdate, ElderlyContractResponse, ElderlyInvoiceItemCreate, ElderlyInvoiceItemUpdate, ElderlyInvoiceItemResponse, ElderlyInvoiceCreate, ElderlyInvoiceUpdate, ElderlyInvoiceResponse, CareMealPriceCreate, CareMealPriceUpdate, CareMealPriceResponse, CareUtilityPriceCreate, CareUtilityPriceUpdate, CareUtilityPriceResponse, CareItemResponse, BillingMonthlyItemCreate, BillingMonthlyItemUpdate, BillingMonthlyItemResponse, BillingInvoiceCreate, BillingInvoiceResponse, BillingInvoiceItemCreate, BillingInvoiceItemResponse, ElderlyMealRecordCreate, ElderlyMealRecordUpdate, ElderlyMealRecordResponse, ElderlyHospitalizationCreate, ElderlyHospitalizationResponse, MonthlyItemSortOrderUpdate
 import uuid
 import json
 from uuid import UUID
@@ -315,14 +315,14 @@ async def refresh_token(refresh_token: str):
 
 # 사용자 프로필 조회 엔드포인트
 @app.get("/profile")
-async def get_profile(current_user: User = Depends(get_current_user)):
+async def get_profile(current_user: dict = Depends(get_current_user)):
     try:
         profile_response = supabase.table("profiles").select("name, role").eq("id", current_user.id).execute()
         profile_data = profile_response.data[0] if profile_response.data else {}
         
         return {
-            "user_id": current_user.id,
-            "email": current_user.email,
+            "user_id": current_user["id"],
+            "email": current_user["email"],
             "name": profile_data.get("name"),
             "role": profile_data.get("role", "manager")
         }
@@ -336,7 +336,7 @@ async def get_profile(current_user: User = Depends(get_current_user)):
 @app.put("/profile")
 async def update_profile(
     profile_update: dict,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     try:
         # 업데이트할 필드 검증
@@ -354,8 +354,8 @@ async def update_profile(
         
         return {
             "message": "프로필이 성공적으로 업데이트되었습니다.",
-            "user_id": current_user.id,
-            "email": current_user.email,
+            "user_id": current_user["id"],
+            "email": current_user["email"],
             "name": update_data.get("name"),
             "role": update_data.get("role", "manager")
         }
@@ -627,7 +627,7 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
 def create_student(
     student: StudentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     try:
         # 빈 문자열을 None으로 변환하는 헬퍼 함수
@@ -822,7 +822,7 @@ def create_student(
                 table_name="students",
                 record_id=str(new_student.id),
                 action="CREATE",
-                user_id=current_user.id if current_user else None,
+                user_id=current_user["id"] if current_user else None,
                 new_values={
                     "name": new_student.name,
                     "email": new_student.email,
@@ -869,7 +869,7 @@ def create_student(
 def update_student(
     student_id: str,
     student_update: StudentUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # 헬퍼 함수
@@ -953,7 +953,7 @@ def update_student(
             table_name="students",
             record_id=str(student.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user.get("id") if current_user else None,
             old_values={
                 "residence_card_number": student.residence_card_number,
                 "residence_card_start": str(student.residence_card_start) if student.residence_card_start else None,
@@ -995,7 +995,7 @@ def get_student_residence_card_history(
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 학생 존재 여부 확인
     student = db.query(Student).filter(Student.id == student_id).first()
@@ -1049,7 +1049,7 @@ def get_student_residence_card_history(
 def update_student_visa_info(
     student_id: str,
     visa_update: VisaInfoUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # 학생 존재 여부 확인
@@ -1291,7 +1291,7 @@ def read_users(db: Session = Depends(get_db)):
 def create_user(
     user: dict, 
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     new_user = User(**user)
     db.add(new_user)
@@ -1306,7 +1306,7 @@ def create_user(
             table_name="users",
             record_id=str(new_user.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "username": new_user.username,
                 "email": new_user.email,
@@ -1352,7 +1352,7 @@ def search_companies(keyword: str, db: Session = Depends(get_db)):
 def create_company(
     company: dict, 
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     new_company = Company(**company)
     db.add(new_company)
@@ -1367,7 +1367,7 @@ def create_company(
             table_name="companies",
             record_id=str(new_company.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "name": new_company.name,
                 "address": new_company.address,
@@ -1390,7 +1390,7 @@ def create_company(
 @app.post("/upload-avatar")
 async def upload_avatar(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
@@ -1454,7 +1454,7 @@ async def upload_avatar(
 async def upload_student_avatar(
     student_id: str,
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
@@ -1539,7 +1539,7 @@ def get_grades(db: Session = Depends(get_db)):
 async def create_invoice(
     invoice: InvoiceCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 학생 존재 여부 확인
     student = db.query(Student).filter(Student.id == invoice.student_id).first()
@@ -1607,7 +1607,7 @@ async def create_invoice(
             table_name="invoices",
             record_id=str(new_invoice.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "student_id": str(new_invoice.student_id),
                 "year": new_invoice.year,
@@ -1983,7 +1983,7 @@ def get_invoice_by_id(
 async def update_invoice(
     invoice_update: InvoiceUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 청구서 존재 여부 확인
     existing_invoice = db.query(Invoice).filter(Invoice.id == invoice_update.invoice_id).first()
@@ -2038,7 +2038,7 @@ async def update_invoice(
             table_name="invoices",
             record_id=str(existing_invoice.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
                 "student_id": str(existing_invoice.student_id),
@@ -2148,7 +2148,7 @@ def get_building(
 def create_building(
     building: BuildingCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     new_building = Building(
         id=str(uuid.uuid4()),
@@ -2170,7 +2170,7 @@ def create_building(
             table_name="buildings",
             record_id=str(new_building.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "name": new_building.name,
                 "address": new_building.address,
@@ -2194,7 +2194,7 @@ def update_building(
     building_id: str,
     building_update: BuildingUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 빌딩 존재 여부 확인
     building = db.query(Building).filter(Building.id == building_id).first()
@@ -2225,7 +2225,7 @@ def update_building(
             table_name="buildings",
             record_id=str(building.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
                 "name": building.name,
@@ -2250,7 +2250,7 @@ def update_building(
 def delete_building(
     building_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 빌딩 존재 여부 확인
     building = db.query(Building).filter(Building.id == building_id).first()
@@ -2275,7 +2275,7 @@ def delete_building(
             table_name="buildings",
             record_id=str(building.id),
             action="DELETE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             note="ビル削除"
         )
@@ -2401,7 +2401,7 @@ def get_room(
 def create_room(
     room: RoomCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 빌딩 존재 여부 확인
     building = db.query(Building).filter(Building.id == room.building_id).first()
@@ -2443,7 +2443,7 @@ def create_room(
             table_name="rooms",
             record_id=str(new_room.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "building_id": str(new_room.building_id),
                 "room_number": new_room.room_number,
@@ -2469,7 +2469,7 @@ def update_room(
     room_id: str,
     room_update: RoomUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 방 존재 여부 확인
     room = db.query(Room).filter(Room.id == room_id).first()
@@ -2517,7 +2517,7 @@ def update_room(
             table_name="rooms",
             record_id=str(room.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
                 "building_id": str(room.building_id),
@@ -2544,7 +2544,7 @@ def update_room(
 def delete_room(
     room_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 방 존재 여부 확인
     room = db.query(Room).filter(Room.id == room_id).first()
@@ -2572,7 +2572,7 @@ def delete_room(
             table_name="rooms",
             record_id=str(room.id),
             action="DELETE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             note="部屋削除"
         )
@@ -2806,7 +2806,7 @@ def assign_student_to_room(
     student_id: str,
     request: AssignRoomRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 학생 존재 여부 확인
     student = db.query(Student).filter(Student.id == student_id).first()
@@ -2846,7 +2846,7 @@ def assign_student_to_room(
             table_name="students",
             record_id=str(student.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
                 "current_room_id": str(request.room_id) if request.room_id else None
@@ -2872,7 +2872,7 @@ def check_in_student(
     room_id: str,
     request: CheckInRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 방 존재 여부 확인
     room = db.query(Room).filter(Room.id == room_id).first()
@@ -2932,7 +2932,7 @@ def check_in_student(
             table_name="residents",
             record_id=str(new_resident.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "room_id": str(new_resident.room_id),
                 "student_id": str(new_resident.resident_id),
@@ -2962,7 +2962,7 @@ def check_out_student(
     room_id: str,
     request: CheckOutRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 방 존재 여부 확인
     room = db.query(Room).filter(Room.id == room_id).first()
@@ -3015,7 +3015,7 @@ def check_out_student(
             table_name="residents",
             record_id=str(resident.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values={
                 "room_id": str(resident.room_id),
                 "student_id": str(resident.resident_id),
@@ -3850,7 +3850,7 @@ def create_new_residence(
     student_id: str,
     request: NewResidenceRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """학생에게 새로운 거주 기록을 추가"""
     # 학생 존재 여부 확인
@@ -3947,7 +3947,7 @@ def create_new_residence(
             table_name="residents",
             record_id=str(new_residence.id),
             action="CREATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             new_values={
                 "room_id": str(new_residence.room_id),
                 "student_id": str(new_residence.resident_id),
@@ -4631,7 +4631,7 @@ def update_charge_item(
     charge_item_id: str,
     charge_item_update: ChargeItemUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """청구 항목 수정"""
     # 청구 항목 존재 여부 확인
@@ -4679,7 +4679,7 @@ def update_charge_item(
             table_name="charge_items",
             record_id=str(charge_item.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
                 "charge_id": str(charge_item.charge_id),
@@ -4711,7 +4711,7 @@ def update_charge_item(
 def delete_charge_item(
     charge_item_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """청구 항목 삭제"""
     # 청구 항목 존재 여부 확인
@@ -4739,7 +4739,7 @@ def delete_charge_item(
             table_name="charge_items",
             record_id=str(charge_item.id),
             action="DELETE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             note="請求項目削除"
         )
@@ -5002,7 +5002,7 @@ def update_room_utility(
     utility_id: str,
     utility_update: RoomUtilityUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """방 공과금 수정"""
     # 공과금 존재 여부 확인
@@ -5065,7 +5065,7 @@ def update_room_utility(
             table_name="room_utilities",
             record_id=str(utility.id),
             action="UPDATE",
-            user_id=current_user.id if current_user else None,
+            user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
                 "room_id": str(utility.room_id),
@@ -7659,7 +7659,7 @@ def get_student_monthly_items(
         # 학생 존재 여부 확인
         student = db.query(Student).filter(Student.id == student_id).first()
         if not student:
-            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다.")
+            raise HTTPException(status_code=404, detail="学生が見つかりません")
         
         # 기본 쿼리 생성
         query = db.query(BillingMonthlyItem).filter(BillingMonthlyItem.student_id == student_id)
@@ -7671,7 +7671,7 @@ def get_student_monthly_items(
             query = query.filter(BillingMonthlyItem.month == month)
         
         # 정렬 (생성일 기준 내림차순, 년도, 월, 정렬 순서)
-        items = query.order_by(BillingMonthlyItem.created_at.asc(), BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).all()
+        items = query.order_by(BillingMonthlyItem.created_at.asc(), BillingMonthlyItem.year, BillingMonthlyItem.month, BillingMonthlyItem.sort_order).order_by(BillingMonthlyItem.sort_order).all()
         
         # 항목 이름별로 그룹화
         grouped_items = {}
@@ -7680,6 +7680,7 @@ def get_student_monthly_items(
                 grouped_items[item.item_name] = {
                     "item_name": item.item_name,
                     "memo": item.memo,
+                    "sort_order": item.sort_order,  # sort_order 추가
                     "months": {}
                 }
             
@@ -7711,6 +7712,7 @@ def get_student_monthly_items(
             result_items.append({
                 "item_name": item_name,
                 "memo": item_data["memo"],
+                "sort_order": item_data["sort_order"],  # sort_order 추가
                 "months": months_list
             })
         
@@ -7721,7 +7723,7 @@ def get_student_monthly_items(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"월별 관리비 항목 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"月別管理費項目の取得中にエラーが発生しました: {str(e)}")
 
 @app.post("/students/{student_id}/monthly-items")
 def create_student_monthly_items(
@@ -7736,7 +7738,7 @@ def create_student_monthly_items(
         # 학생 존재 여부 확인
         student = db.query(Student).filter(Student.id == student_id).first()
         if not student:
-            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다.")
+            raise HTTPException(status_code=404, detail="学生が見つかりません")
         
         # 연도 설정 (기본값: 현재 연도)
         target_year = year if year is not None else datetime.now().year
@@ -7749,7 +7751,7 @@ def create_student_monthly_items(
         ).first()
         
         if existing_items:
-            raise HTTPException(status_code=400, detail=f"{target_year}년에 이미 존재하는 항목명입니다.")
+            raise HTTPException(status_code=400, detail=f"{target_year}年に既に同じ項目名が存在します。")
         
         # 1~12월까지 항목 생성
         items_to_create = []
@@ -7802,7 +7804,100 @@ def create_student_monthly_items(
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"월별 관리비 항목 생성 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"月別管理費項目の作成中にエラーが発生しました: {str(e)}")
+
+@app.put("/monthly-items/sort-order")
+def update_monthly_items_sort_order(
+    sort_order_data: MonthlyItemSortOrderUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """월별 관리비 항목의 정렬 순서 업데이트"""
+    try:
+        student_id = sort_order_data.student_id
+        year = sort_order_data.year
+        items = sort_order_data.items
+        
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="学生が見つかりません")
+        
+        # 각 항목의 sort_order 업데이트 (해당 학생의 데이터만)
+        updated_count = 0
+        log_data = []  # 로그 데이터를 저장할 리스트
+        
+        for item_data in items:
+            item_name = item_data["item_name"]
+            new_sort_order = item_data["sort_order"]
+            
+            # 해당 항목의 모든 월 데이터 조회 (학생 ID, 년도, 항목명으로 필터링)
+            monthly_items = db.query(BillingMonthlyItem).filter(
+                BillingMonthlyItem.item_name == item_name,
+                BillingMonthlyItem.student_id == student_id,
+                BillingMonthlyItem.year == year
+            ).all()
+            
+            if monthly_items:
+                # 각 월의 데이터에 대해 sort_order 업데이트
+                for item in monthly_items:
+                    # 기존 값 저장 (로그용)
+                    old_sort_order = item.sort_order
+                    
+                    # sort_order 업데이트
+                    item.sort_order = new_sort_order
+                    
+                    # 로그 데이터 수집
+                    log_data.append({
+                        "record_id": str(item.id),
+                        "old_values": {"sort_order": old_sort_order},
+                        "new_values": {"sort_order": new_sort_order},
+                        "note": f"月別管理費項目の並び順更新 - {item.item_name} ({item.year}年{item.month}月): {old_sort_order} → {new_sort_order}"
+                    })
+                    
+                    updated_count += 1
+            else:
+                # 해당 항목이 해당 학생의 데이터가 아니거나 존재하지 않는 경우
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"項目名 '{item_name}'のデータが見つからないか、該当学生のデータではありません"
+                )
+        
+        # 데이터베이스 커밋
+        db.commit()
+        
+        # 모든 업데이트 완료 후 한 번에 로그 생성
+        try:
+            for log_item in log_data:
+                create_database_log(
+                    db=db,
+                    table_name="billing_monthly_items",
+                    record_id=log_item["record_id"],
+                    action="UPDATE",
+                    user_id=current_user.get("id") if current_user else None,
+                    old_values=log_item["old_values"],
+                    new_values=log_item["new_values"],
+                    changed_fields=["sort_order"],
+                    note=log_item["note"]
+                )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
+        # 데이터베이스 커밋
+        db.commit()
+        
+        return {
+            "message": f"{student.name}の{year}年の月別管理費項目の並び順が正常に更新されました",
+            "student_id": student_id,
+            "student_name": student.name,
+            "year": year,
+            "updated_count": updated_count,
+            "total_items": len(items)
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"並び順の更新中にエラーが発生しました: {str(e)}")
 
 @app.put("/monthly-items/{item_id}")
 def update_monthly_item(
@@ -7848,10 +7943,10 @@ def update_monthly_item(
                     "memo": item.memo
                 },
                 changed_fields=["amount", "memo"] if item_update.amount is not None or item_update.memo is not None else [],
-                note=f"월별 관리비 항목 수정 - {item.item_name}"
+                note=f"月別管理費項目の並び順更新 - {item.item_name}"
             )
-        except Exception as log_error:
-            print(f"로그 생성 중 오류: {log_error}")
+        except Exception as e:
+            print(f"로그 생성 중 오류: {e}")
         
         return {
             "message": "項目が正常に更新されました",
@@ -7944,12 +8039,12 @@ def get_monthly_item(
         item = db.query(BillingMonthlyItem).filter(BillingMonthlyItem.id == item_id).first()
         
         if not item:
-            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다.")
+            raise HTTPException(status_code=404, detail="該当の項目が見つかりません")
         
         return item
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"항목 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"項目の取得中にエラーが発生しました: {str(e)}")
 
 @app.post("/billing-invoices/generate")
 def generate_company_invoice_pdfV2(

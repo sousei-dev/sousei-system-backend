@@ -1037,3 +1037,23 @@ class ElderlyHospitalizationStatusResponse(BaseModel):
     resident_name: str
     hospitalization_status: str  # '正常' 또는 '入院中'
     latest_hospitalization: Optional[dict] = None
+
+class MonthlyItemSortOrderUpdate(BaseModel):
+    student_id: str = Field(..., description="학생 ID")
+    year: int = Field(..., description="업데이트할 년도")
+    items: List[dict] = Field(..., description="정렬 순서가 포함된 항목명 리스트")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "student_id": "123e4567-e89b-12d3-a456-426614174000",
+                "year": 2024,
+                "items": [
+                    {"item_name": "家賃", "sort_order": 1},
+                    {"item_name": "共益費", "sort_order": 2},
+                    {"item_name": "水道代", "sort_order": 3},
+                    {"item_name": "電気代", "sort_order": 4},
+                    {"item_name": "ガス代", "sort_order": 5}
+                ]
+            }
+        }
