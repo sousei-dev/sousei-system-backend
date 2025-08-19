@@ -4,8 +4,10 @@ from datetime import datetime, date
 from uuid import UUID
 
 class UserCreate(BaseModel):
+    name: str
     email: str
     password: str
+    role: Optional[str] = "manager"
 
 class UserLogin(BaseModel):
     email: str
@@ -158,28 +160,55 @@ class StudentResponse(BaseModel):
             UUID: str  # UUID를 문자열로 변환
         }
 
-class InvoiceItemCreate(BaseModel):
-    name: str
-    unit_price: int = Field(gt=0)  # 단가
-    quantity: int = Field(default=1, ge=1)  # 수량 추가
-    amount: int = Field(gt=0)  # 금액
-    sort_order: int = 0
-    memo: Optional[str] = None
-    type: Optional[str] = None
-
+# 인보이스 관련 스키마
 class InvoiceCreate(BaseModel):
-    student_id: UUID
-    year: int
-    month: int = Field(ge=1, le=12)
-    items: List[InvoiceItemCreate]
-    invoice_number: Optional[str] = None
+    student_id: str
+    invoice_date: date
+    due_date: date
+    total_amount: float
+    status: Optional[str] = "pending"
+    notes: Optional[str] = None
 
 class InvoiceUpdate(BaseModel):
-    invoice_id: UUID
-    year: int
-    month: int = Field(ge=1, le=12)
-    items: List[InvoiceItemCreate]
-    invoice_number: Optional[str] = None
+    id: str
+    invoice_date: Optional[date] = None
+    due_date: Optional[date] = None
+    total_amount: Optional[float] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+class InvoiceResponse(BaseModel):
+    id: str
+    student_id: str
+    student_name: Optional[str] = None
+    invoice_date: date
+    due_date: date
+    total_amount: float
+    status: str
+    notes: Optional[str] = None
+    created_at: datetime
+
+# 인보이스 항목 관련 스키마
+class InvoiceItemCreate(BaseModel):
+    invoice_id: str
+    description: str
+    quantity: int
+    unit_price: float
+    total_price: float
+
+class InvoiceItemUpdate(BaseModel):
+    description: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[float] = None
+    total_price: Optional[float] = None
+
+class InvoiceItemResponse(BaseModel):
+    id: str
+    invoice_id: str
+    description: str
+    quantity: int
+    unit_price: float
+    total_price: float
 
 class InvoiceItemResponse(BaseModel):
     id: UUID
@@ -577,10 +606,10 @@ class VisaInfoUpdate(BaseModel):
     residence_card_start: Union[date, str] = Field(..., description="시작일")
     residence_card_expiry: Union[date, str] = Field(..., description="만료일")
     visa_application_date: Union[date, str] = Field(..., description="비자 신청일")
-    year: str = Field(..., description="갱신년째")
+    visa_year: str = Field(..., description="갱신년째")
     note: Optional[str] = Field(None, description="비고사항")
 
-    @field_validator('residence_card_start', 'residence_card_expiry', 'residence_card_number', 'year', mode='before')
+    @field_validator('residence_card_start', 'residence_card_expiry', 'residence_card_number', 'visa_year', mode='before')
     @classmethod
     def validate_date_fields(cls, v):
         if v == "" or v is None:
