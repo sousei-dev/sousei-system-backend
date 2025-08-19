@@ -610,12 +610,14 @@ def update_student_visa_info(
     residence_card_changed = False
     if (visa_update.residence_card_number and 
         visa_update.residence_card_start and 
-        visa_update.residence_card_expiry):
+        visa_update.residence_card_expiry and
+        visa_update.visa_application_date):
         
         # 기존 정보와 비교
         if (student.residence_card_number != parse_date(visa_update.residence_card_start) or
             student.residence_card_start != parse_date(visa_update.residence_card_start) or
-            student.residence_card_expiry != parse_date(visa_update.residence_card_expiry)):
+            student.residence_card_expiry != parse_date(visa_update.residence_card_expiry) or
+            student.visa_application_date != parse_date(visa_update.visa_application_date)):
             residence_card_changed = True
             
             # 같은 년차인지 확인
@@ -641,6 +643,8 @@ def update_student_visa_info(
         student.residence_card_expiry = parse_date(visa_update.residence_card_expiry)
     if visa_update.visa_year is not None:
         student.visa_year = clean_value(visa_update.visa_year)
+    if visa_update.visa_application_date is not None:
+        student.visa_application_date = parse_date(visa_update.visa_application_date)
 
     # Residence Card 히스토리 저장 (변경된 경우)
     if residence_card_changed:
@@ -650,6 +654,7 @@ def update_student_visa_info(
             card_number=visa_update.residence_card_number,
             start_date=parse_date(visa_update.residence_card_start),
             expiry_date=parse_date(visa_update.residence_card_expiry),
+            application_date=parse_date(visa_update.visa_application_date),
             year=visa_update.visa_year,
             note="ビザ情報更新"
         )
@@ -671,15 +676,17 @@ def update_student_visa_info(
                     "residence_card_number": student.residence_card_number,
                     "residence_card_start": student.residence_card_start,
                     "residence_card_expiry": student.residence_card_expiry,
-                    "visa_year": student.visa_year
+                    "visa_year": student.visa_year,
+                    "visa_application_date": student.visa_application_date
                 },
                 new_values={
                     "residence_card_number": student.residence_card_number,
                     "residence_card_start": student.residence_card_start,
                     "residence_card_expiry": student.residence_card_expiry,
-                    "visa_year": student.visa_year
+                    "visa_year": student.visa_year,
+                    "visa_application_date": student.visa_application_date
                 },
-                changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year"],
+                changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year", "visa_application_date"],
                 note=f"ビザ情報更新 - {student.name}"
             )
         except Exception as log_error:
@@ -736,9 +743,10 @@ def get_student_residence_card_history(
         history_data = {
             "id": str(history.id),
             "student_id": str(history.student_id),
-            "card_number": history.card_number,
-            "start_date": history.start_date,
-            "expiry_date": history.expiry_date,
+            "residence_card_number": history.card_number,
+            "residence_card_start": history.start_date,
+            "residence_card_expiry": history.expiry_date,
+            "visa_application_date": history.application_date,
             "year": history.year,
             "registered_at": history.registered_at,
             "note": history.note
@@ -1875,4 +1883,158 @@ async def upload_student_avatar(
         raise HTTPException(
             status_code=500,
             detail=f"파일 업로드 중 오류가 발생했습니다: {str(e)}"
+        )
+
+# ===== Residence Card History 적용 관련 API =====
+
+@router.put("/{student_id}/apply-residence-card-history/{history_id}")
+def apply_residence_card_history_to_student(
+    student_id: str,
+    history_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Residence Card History의 데이터를 학생 정보에 적용"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다")
+        
+        # Residence Card History 존재 여부 확인
+        history = db.query(ResidenceCardHistory).filter(
+            ResidenceCardHistory.id == history_id,
+            ResidenceCardHistory.student_id == student_id
+        ).first()
+        
+        if not history:
+            raise HTTPException(status_code=404, detail="해당 Residence Card History를 찾을 수 없습니다")
+        
+        # 기존 값 저장 (로그용)
+        old_values = {
+            "residence_card_number": student.residence_card_number,
+            "residence_card_start": student.residence_card_start,
+            "residence_card_expiry": student.residence_card_expiry,
+            "visa_application_date": student.visa_application_date,
+            "visa_year": student.visa_year
+        }
+        
+        # 학생 정보에 Residence Card History 데이터 적용
+        student.residence_card_number = history.card_number
+        student.residence_card_start = history.start_date
+        student.residence_card_expiry = history.expiry_date
+        student.visa_application_date = history.application_date
+        student.visa_year = history.year
+        
+        # 데이터베이스 커밋
+        db.commit()
+        
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="students",
+                record_id=str(student.id),
+                action="UPDATE",
+                user_id=current_user["id"] if current_user else None,
+                old_values=old_values,
+                new_values={
+                    "residence_card_number": history.card_number,
+                    "residence_card_start": history.start_date.strftime("%Y-%m-%d") if history.start_date else None,
+                    "residence_card_expiry": history.expiry_date.strftime("%Y-%m-%d") if history.expiry_date else None,
+                    "visa_year": history.year
+                },
+                changed_fields=["residence_card_number", "residence_card_start", "residence_card_expiry", "visa_year"],
+                note=f"Residence Card History 적용 - {student.name}: {history.year}년차 데이터 적용 (History ID: {history_id})"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": f"{student.name}의 Residence Card 정보가 History 데이터로 성공적으로 업데이트되었습니다",
+            "student_id": str(student.id),
+            "student_name": student.name,
+            "history_id": str(history.id),
+            "applied_data": {
+                "residence_card_number": history.card_number,
+                "residence_card_start": history.start_date.strftime("%Y-%m-%d") if history.start_date else None,
+                "residence_card_expiry": history.expiry_date.strftime("%Y-%m-%d") if history.expiry_date else None,
+                "visa_year": history.year
+            },
+            "applied_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Residence Card History 적용 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@router.get("/{student_id}/residence-card-histories")
+def get_student_residence_card_histories(
+    student_id: str,
+    page: int = Query(1, description="페이지 번호", ge=1),
+    size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """학생의 모든 Residence Card History 조회"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다")
+        
+        # Residence Card History 조회
+        query = db.query(ResidenceCardHistory).filter(
+            ResidenceCardHistory.student_id == student_id
+        ).order_by(ResidenceCardHistory.year.desc(), ResidenceCardHistory.registered_at.desc())
+        
+        # 전체 항목 수 계산
+        total_count = query.count()
+        
+        # 페이지네이션 적용
+        histories = query.offset((page - 1) * size).limit(size).all()
+        
+        # 전체 페이지 수 계산
+        total_pages = (total_count + size - 1) // size
+        
+        # 응답 데이터 준비
+        result = []
+        for history in histories:
+            history_data = {
+                "id": str(history.id),
+                "student_id": str(history.student_id),
+                "card_number": history.card_number,
+                "start_date": history.start_date.strftime("%Y-%m-%d") if history.start_date else None,
+                "expiry_date": history.expiry_date.strftime("%Y-%m-%d") if history.expiry_date else None,
+                "year": history.year,
+                "registered_at": history.registered_at.strftime("%Y-%m-%d %H:%M:%S") if history.registered_at else None,
+                "note": history.note,
+                "can_apply": True  # 모든 History는 적용 가능
+            }
+            result.append(history_data)
+        
+        return {
+            "student": {
+                "id": str(student.id),
+                "name": student.name,
+                "current_residence_card_number": student.residence_card_number,
+                "current_residence_card_start": student.residence_card_start.strftime("%Y-%m-%d") if student.residence_card_start else None,
+                "current_residence_card_expiry": student.residence_card_expiry.strftime("%Y-%m-%d") if student.residence_card_expiry else None,
+                "current_visa_year": student.visa_year
+            },
+            "items": result,
+            "total": total_count,
+            "page": page,
+            "size": size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_previous": page > 1
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Residence Card History 조회 중 오류가 발생했습니다: {str(e)}"
         )

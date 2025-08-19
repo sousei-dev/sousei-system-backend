@@ -1086,3 +1086,31 @@ class MonthlyItemSortOrderUpdate(BaseModel):
                 ]
             }
         }
+
+# ===== Report 관련 스키마들 =====
+
+class ReportCreate(BaseModel):
+    occurrence_date: date
+    report_type: str = Field(..., description="보고 종류: defect/claim/other")
+    report_content: str = Field(..., description="보고 내용")
+
+class ReportUpdate(BaseModel):
+    occurrence_date: Optional[date] = None
+    report_type: Optional[str] = None
+    report_content: Optional[str] = None
+    status: Optional[str] = Field(None, description="상태: pending/in_progress/completed")
+
+class ReportResponse(BaseModel):
+    id: str
+    reporter_id: str
+    occurrence_date: date
+    report_type: str
+    report_content: str
+    status: str
+    created_at: datetime
+
+class ReportPhotoCreate(BaseModel):
+    photo_url: str
+
+class ReportCommentCreate(BaseModel):
+    comment: str = Field(..., description="코멘트 내용")

@@ -307,6 +307,7 @@ class ResidenceCardHistory(Base):
     start_date = Column(Date, nullable=False)
     expiry_date = Column(Date, nullable=False)
     registered_at = Column(DateTime, default=datetime.utcnow)
+    application_date = Column(Date, nullable=False)
     year = Column(String)
     note = Column(String)
 
