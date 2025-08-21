@@ -126,6 +126,11 @@ def get_students(
                 query = query.order_by(Grade.name.desc())
             else:
                 query = query.order_by(Grade.name.asc())
+        elif sort_by == "student_type":
+            if sort_desc:
+                query = query.order_by(Student.student_type.desc())
+            else:
+                query = query.order_by(Student.student_type.asc())
     
     # 전체 항목 수 계산
     total_count = query.count()
@@ -169,6 +174,7 @@ def get_students(
             "experience_over_2_years": student.experience_over_2_years,
             "status": student.status,
             "arrival_type": student.arrival_type,
+            "student_type": student.student_type,
             "company": {
                 "name": student.company.name
             } if student.company else None,
