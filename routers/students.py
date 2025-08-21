@@ -408,7 +408,7 @@ def create_student(
             current_room_id=parse_uuid(student.room_id) if student.room_id else None,
             facebook_name=clean_value(student.facebook_name),
             visa_year=clean_value(student.visa_year),
-            status="active"
+            status="ACTIVE"
         )
         
         db.add(new_student)
