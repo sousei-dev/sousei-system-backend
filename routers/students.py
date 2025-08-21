@@ -415,6 +415,38 @@ def create_student(
         db.commit()
         db.refresh(new_student)
         
+        # Residence Card 히스토리 저장 (residence card 정보가 있는 경우)
+        if (new_student.residence_card_number and 
+            new_student.residence_card_start and 
+            new_student.residence_card_expiry and
+            new_student.visa_year):
+            
+            # 같은 년차인지 확인
+            existing_history = db.query(ResidenceCardHistory).filter(
+                ResidenceCardHistory.student_id == new_student.id,
+                ResidenceCardHistory.year == new_student.visa_year
+            ).first()
+            
+            if existing_history:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{new_student.visa_year}년차의 residence card가 이미 존재합니다. 다른 년차를 입력해주세요."
+                )
+            
+            residence_card_history = ResidenceCardHistory(
+                id=str(uuid.uuid4()),
+                student_id=new_student.id,
+                card_number=new_student.residence_card_number,
+                start_date=new_student.residence_card_start,
+                expiry_date=new_student.residence_card_expiry,
+                year=new_student.visa_year,
+                note="新規登録"
+            )
+            db.add(residence_card_history)
+            
+            # Residence Card 히스토리 커밋
+            db.commit()
+        
         # 데이터베이스 로그 생성
         try:
             create_database_log(
