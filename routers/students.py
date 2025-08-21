@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile
 from fastapi.security import HTTPBearer
 from supabase import create_client
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 from typing import Optional, List
 from database import SessionLocal, engine
 from models import Student, Company, Grade, Room, Building, ResidenceCardHistory, Resident, BillingMonthlyItem
@@ -62,6 +62,7 @@ def get_students(
     room_number: Optional[str] = Query(None, description="방 번호로 검색"),
     status: Optional[str] = Query(None, description="상태로 검색"),
     grade: Optional[str] = Query(None, description="등급으로 검색"),
+    has_no_building: Optional[bool] = Query(None, description="빌딩이 없는 학생만 검색 (true: 빌딩 없음, false: 빌딩 있음)"),
     sort_by: Optional[str] = Query(None, description="정렬 필드 (nationality 또는 grade)"),
     sort_desc: Optional[bool] = Query(False, description="내림차순 정렬 여부 (true: 내림차순, false: 오름차순)"),
     page: int = Query(1, description="페이지 번호", ge=1),
@@ -103,6 +104,15 @@ def get_students(
         query = query.filter(Student.status == status)
     if grade:
         query = query.filter(Grade.name.ilike(f"%{grade}%"))
+    
+    # has_no_building 필터 적용
+    if has_no_building is not None:
+        if has_no_building:
+            # 빌딩이 없는 학생 (current_room_id가 NULL인 경우만)
+            query = query.filter(Student.current_room_id.is_(None))
+        else:
+            # 빌딩이 있는 학생 (current_room_id가 NOT NULL인 경우)
+            query = query.filter(Student.current_room_id.isnot(None))
     
     # 정렬 적용
     if sort_by:
