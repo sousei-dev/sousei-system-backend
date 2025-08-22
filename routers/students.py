@@ -547,6 +547,22 @@ def update_student(
                         status_code=400,
                         detail=f"{student_update.visa_year}년차의 residence card가 이미 존재합니다. 다른 년차를 입력해주세요."
                     )
+    
+    # 퇴직일 변경 감지 및 상태 업데이트
+    resignation_changed = False
+    if student_update.resignation_date is not None:
+        # 기존 퇴직일과 비교
+        if student.resignation_date != student_update.resignation_date:
+            resignation_changed = True
+            
+            # 퇴직일이 설정되면 상태를 RESIGNED로 변경
+            if student_update.resignation_date:
+                student.status = "RESIGNED"
+                print(f"퇴직일 설정으로 인한 상태 변경: {student.name} → RESIGNED")
+            # 퇴직일이 제거되면 상태를 ACTIVE로 복원
+            elif not student_update.resignation_date and student.status == "RESIGNED":
+                student.status = "ACTIVE"
+                print(f"퇴직일 제거로 인한 상태 복원: {student.name} → ACTIVE")
 
     # 기존 값 저장 (로그용)
     old_values = {
@@ -560,7 +576,8 @@ def update_student(
         "phone": student.phone,
         "email": student.email,
         "address": student.address,
-        "note": student.note
+        "note": student.note,
+        "resignation_date": student.resignation_date.strftime("%Y-%m-%d") if student.resignation_date else None
     }
     
     # 학생 정보 업데이트
@@ -602,10 +619,11 @@ def update_student(
                     "nationality": student.nationality,
                     "student_type": student.student_type,
                     "status": student.status,
-                    "note": student.note
+                    "note": student.note,
+                    "resignation_date": student.resignation_date.strftime("%Y-%m-%d") if student.resignation_date else None
                 },
-                changed_fields=list(update_data.keys()),
-                note=f"学生情報更新 - {student.name}"
+                changed_fields=list(update_data.keys()) + (["status"] if resignation_changed else []),
+                note=f"学生情報更新 - {student.name}" + (f" (퇴직 처리: {student_update.resignation_date})" if resignation_changed and student_update.resignation_date else "")
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
@@ -710,7 +728,7 @@ def update_student_visa_info(
             expiry_date=parse_date(visa_update.residence_card_expiry),
             application_date=parse_date(visa_update.visa_application_date),
             year=visa_update.visa_year,
-            note="ビザ情報更新"
+            note=""
         )
         db.add(residence_card_history)
 
@@ -2091,4 +2109,77 @@ def get_student_residence_card_histories(
         raise HTTPException(
             status_code=500, 
             detail=f"Residence Card History 조회 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@router.delete("/{student_id}/delete-residence-card-history/{history_id}")
+def delete_residence_card_history(
+    student_id: str,
+    history_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """학생의 Residence Card History 삭제"""
+    try:
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="学生が見つかりません")
+        
+        # Residence Card History 존재 여부 및 해당 학생의 것인지 확인
+        history = db.query(ResidenceCardHistory).filter(
+            ResidenceCardHistory.id == history_id,
+            ResidenceCardHistory.student_id == student_id
+        ).first()
+        
+        if not history:
+            raise HTTPException(status_code=404, detail="指定されたResidence Card Historyが見つかりません")
+        
+        # 삭제 전 데이터 저장 (로그용)
+        deleted_data = {
+            "id": str(history.id),
+            "student_id": str(history.student_id),
+            "card_number": history.card_number,
+            "start_date": history.start_date.strftime("%Y-%m-%d") if history.start_date else None,
+            "expiry_date": history.expiry_date.strftime("%Y-%m-%d") if history.expiry_date else None,
+            "application_date": history.application_date.strftime("%Y-%m-%d") if history.application_date else None,
+            "year": history.year,
+            "registered_at": history.registered_at.strftime("%Y-%m-%d %H:%M:%S") if history.registered_at else None,
+            "note": history.note
+        }
+        
+        # Residence Card History 삭제
+        db.delete(history)
+        db.commit()
+        
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="residence_card_histories",
+                record_id=str(history.id),
+                action="DELETE",
+                user_id=current_user["id"] if current_user else None,
+                old_values=deleted_data,
+                note=f"Residence Card History削除 - {student.name}: {history.year}年차 ({history.card_number})"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": f"{student.name}の{history.year}年차Residence Card Historyが正常に削除されました",
+            "deleted_history": {
+                "id": str(history.id),
+                "student_id": str(student_id),
+                "student_name": student.name,
+                "year": history.year,
+                "card_number": history.card_number,
+                "deleted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Residence Card History削除中にエラーが発生しました: {str(e)}"
         )
