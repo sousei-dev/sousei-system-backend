@@ -423,8 +423,7 @@ def create_student(
         # Residence Card 히스토리 저장 (residence card 정보가 있는 경우)
         if (new_student.residence_card_number and 
             new_student.residence_card_start and 
-            new_student.residence_card_expiry and
-            new_student.visa_year):
+            new_student.residence_card_expiry):
             
             # 같은 년차인지 확인
             existing_history = db.query(ResidenceCardHistory).filter(
