@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, EmailStr, field_validator
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Any
 from datetime import datetime, date
 from uuid import UUID
 
@@ -120,6 +120,7 @@ class StudentUpdate(BaseModel):
     current_room_id: Optional[UUID] = None
     facebook_name: Optional[str] = None
     visa_year: Optional[str] = None
+    note: Optional[str] = None
 
 class StudentResponse(BaseModel):
     id: str
@@ -153,6 +154,7 @@ class StudentResponse(BaseModel):
     arrival_type: Optional[str] = None
     facebook_name: Optional[str] = None
     visa_year: Optional[str] = None
+    note: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -1094,6 +1096,12 @@ class ReportCreate(BaseModel):
     report_type: str = Field(..., description="보고 종류: defect/claim/other")
     report_content: str = Field(..., description="보고 내용")
 
+class ReportCreateWithPhotos(BaseModel):
+    occurrence_date: date
+    report_type: str = Field(..., description="보고 종류: defect/claim/other")
+    report_content: str = Field(..., description="보고 내용")
+    photos: Optional[List[Any]] = Field(None, description="첨부할 사진들")
+
 class ReportUpdate(BaseModel):
     occurrence_date: Optional[date] = None
     report_type: Optional[str] = None
@@ -1113,4 +1121,5 @@ class ReportPhotoCreate(BaseModel):
     photo_url: str
 
 class ReportCommentCreate(BaseModel):
-    comment: str = Field(..., description="코멘트 내용")
+    comment: Optional[str] = Field(None, description="코멘트 내용")
+    comment_type: str = Field(..., description="코멘트 유형: pending/in_progress/completed/rejected(상태 업데이트), general(일반 코멘트), instruction(지시사항)")

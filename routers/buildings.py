@@ -28,7 +28,7 @@ def get_buildings(
 ):
     # 기본 쿼리 생성
     query = db.query(Building)
-
+        
     # 필터 조건 추가
     if name:
         query = query.filter(Building.name.ilike(f"%{name}%"))
@@ -36,20 +36,20 @@ def get_buildings(
         query = query.filter(Building.address.ilike(f"%{address}%"))
     if resident_type:
         query = query.filter(Building.resident_type == resident_type)
-    # 전체 항목 수 계산
-    total_count = query.count()
-
-    # 페이지네이션 적용
+        # 전체 항목 수 계산
+        total_count = query.count()
+        
+        # 페이지네이션 적용
     buildings = query.offset((page - 1) * size).limit(size).all()
-
-    # 전체 페이지 수 계산
+        
+        # 전체 페이지 수 계산
     total_pages = (total_count + size - 1) // size
-
+        
     return {
-        "items": buildings,
-        "total": total_count,
-        "total_pages": total_pages,
-        "current_page": page
+      "items": buildings,
+      "total": total_count,
+      "total_pages": total_pages,
+      "current_page": page
     }
 
 @router.get("/options")
@@ -149,7 +149,7 @@ def get_rooms_by_building(
     # 빌딩 존재 여부 확인
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
-        raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
+      raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
 
     # 기본 쿼리 생성
     query = db.query(Room).filter(Room.building_id == building_id)
@@ -247,8 +247,8 @@ def update_building(
             user_id=current_user["id"] if current_user else None,
             old_values=old_values,
             new_values={
-                "name": building.name,
-                "address": building.address,
+            "name": building.name,
+            "address": building.address,
                 "building_type": building.building_type,
                 "total_rooms": building.total_rooms,
                 "note": building.note
@@ -905,9 +905,9 @@ def get_monthly_invoice_preview_by_rooms(
             # 방 정보 구성
             room_data = {
                 "room_id": str(room.id),
-                "room_number": room.room_number,
-                "floor": room.floor,
-                "capacity": room.capacity,
+                    "room_number": room.room_number,
+                    "floor": room.floor,
+                    "capacity": room.capacity,
                 "current_residents_count": len(residents),
                 "building_name": room.building.name if room.building else None,
                 "residents": residents_data,

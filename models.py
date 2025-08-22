@@ -17,6 +17,13 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     role = Column(String, default="manager")
 
+class Profiles(Base):
+    __tablename__ = "profiles"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String)
+    role = Column(String)
+
 class Student(Base):
     __tablename__ = "students"
 
@@ -60,6 +67,7 @@ class Student(Base):
     current_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"))
     facebook_name = Column(String)
     visa_year = Column(String)
+    note = Column(Text)
 
     # 관계 설정
     company = relationship("Company", back_populates="students")
@@ -354,7 +362,7 @@ class Elderly(Base):
     # 관계 설정
     current_room = relationship("Room", foreign_keys=[current_room_id])
     category = relationship("ElderlyCategories", foreign_keys=[categories_id])
-    hospitalizations = relationship("ElderlyHospitalization", foreign_keys="ElderlyHospitalization.elderly_id", cascade="all, delete-orphan")
+    hospitalizations = relationship("ElderlyHospitalization", back_populates="elderly", cascade="all, delete-orphan")
 
 
 
@@ -538,8 +546,60 @@ class ElderlyHospitalization(Base):
     created_by = Column(String, nullable=True)  # 기록 작성자
 
     # 관계 설정
-    elderly = relationship("Elderly", foreign_keys=[elderly_id])
+    elderly = relationship("Elderly", back_populates="hospitalizations")
 
     __table_args__ = (
         UniqueConstraint('elderly_id', 'hospitalization_type', 'date', name='unique_hospitalization_per_day'),
     )
+
+# ===== Report 관련 모델들 =====
+
+class Report(Base):
+    __tablename__ = "reports"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reporter_id = Column(String, nullable=False)  # Supabase auth.users(id) 참조
+    occurrence_date = Column(Date, nullable=False)
+    report_type = Column(String, nullable=False)  # defect, claim, other
+    report_content = Column(Text, nullable=False)
+    status = Column(String, default="pending")  # pending, in_progress, completed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    photos = relationship("ReportPhoto", back_populates="report", cascade="all, delete-orphan")
+    comments = relationship("ReportComment", back_populates="report", cascade="all, delete-orphan")
+    
+    # Supabase auth.users와의 가상 관계 (실제 테이블 연결 없음)
+    @property
+    def reporter_info(self):
+        # Supabase auth.users에서 사용자 정보 조회
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class ReportPhoto(Base):
+    __tablename__ = "report_photos"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"), nullable=False)
+    photo_url = Column(Text, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    report = relationship("Report", back_populates="photos")
+
+class ReportComment(Base):
+    __tablename__ = "report_comments"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"), nullable=False)
+    operator_id = Column(String, nullable=True)  # Supabase auth.users(id) 참조
+    comment = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    report = relationship("Report", back_populates="comments")
+    
+    # Supabase auth.users와의 가상 관계 (실제 테이블 연결 없음)
+    @property
+    def operator_info(self):
+        # Supabase auth.users에서 사용자 정보 조회
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회

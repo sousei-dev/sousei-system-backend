@@ -175,6 +175,7 @@ def get_students(
             "status": student.status,
             "arrival_type": student.arrival_type,
             "student_type": student.student_type,
+            "note": student.note,
             "company": {
                 "name": student.company.name
             } if student.company else None,
@@ -201,6 +202,7 @@ def get_students(
 @router.get("/expiring-soon")
 def get_students_expiring_soon(
     months_ahead: int = Query(4, description="만료 몇 개월 전부터 조회할지 (기본값: 4개월)"),
+    student_type: Optional[str] = Query(None, description="학생 유형으로 검색"),
     page: int = Query(1, description="페이지 번호", ge=1),
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     db: Session = Depends(get_db)
@@ -222,6 +224,8 @@ def get_students_expiring_soon(
             Student.residence_card_expiry >= current_date  # 아직 만료되지 않은 학생
         ).order_by(Student.residence_card_expiry.asc())  # 만료일이 빠른 순으로 정렬
         
+        if student_type:
+            query = query.filter(Student.student_type == student_type)
         # 전체 항목 수 계산
         total_count = query.count()
         
@@ -321,6 +325,7 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
         "current_room_id": str(student.current_room_id) if student.current_room_id else None,
         "facebook_name": student.facebook_name,
         "visa_year": student.visa_year,
+        "note": student.note,
         "company": {
             "id": str(student.company.id),
             "name": student.company.name
@@ -555,7 +560,8 @@ def update_student(
         "status": student.status,
         "phone": student.phone,
         "email": student.email,
-        "address": student.address
+        "address": student.address,
+        "note": student.note
     }
     
     # 학생 정보 업데이트
@@ -596,7 +602,8 @@ def update_student(
                     "grade_id": str(student.grade_id) if student.grade_id else None,
                     "nationality": student.nationality,
                     "student_type": student.student_type,
-                    "status": student.status
+                    "status": student.status,
+                    "note": student.note
                 },
                 changed_fields=list(update_data.keys()),
                 note=f"学生情報更新 - {student.name}"
