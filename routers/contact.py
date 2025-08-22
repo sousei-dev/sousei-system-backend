@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import Optional, List, Union
 from database import SessionLocal, engine
-from models import Report, ReportPhoto, ReportComment, Student, Company, Profiles
-from schemas import ReportCreate, ReportUpdate, ReportResponse, ReportCommentCreate, ReportPhotoCreate
+from models import Contact, ContactPhoto, ContactComment, Student, Company, Profiles
+from schemas import ContactCreate, ContactUpdate, ContactResponse, ContactCommentCreate, ContactPhotoCreate
 from datetime import datetime, date, timedelta
 import uuid
 from database_log import create_database_log
@@ -16,7 +16,7 @@ import string
 from supabase import create_client
 from utils.dependencies import get_current_user
 
-router = APIRouter(prefix="/reports", tags=["리포트 관리"])
+router = APIRouter(prefix="/contact", tags=["리포트 관리"])
 
 # Supabase 설정
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -43,11 +43,11 @@ def generate_random_filename(original_filename: str) -> str:
     new_filename = f"{random_string}.{file_extension}"
     return new_filename
 
-# ===== Reports 관련 API들 =====
+# ===== contact 관련 API들 =====
 
 @router.get("")
-def get_reports(
-    report_type: Optional[str] = Query(None, description="보고 종류로 필터링 (defect/claim/other)"),
+def get_contact(
+    contact_type: Optional[str] = Query(None, description="보고 종류로 필터링 (defect/claim/other)"),
     status: Optional[str] = Query(None, description="상태로 필터링 (pending/in_progress/completed)"),
     occurrence_date_from: Optional[date] = Query(None, description="발생일 시작일"),
     occurrence_date_to: Optional[date] = Query(None, description="발생일 종료일"),
@@ -59,9 +59,9 @@ def get_reports(
     """리포트 목록 조회 (필터링, 페이지네이션 지원)"""
     try:
         # 기본 쿼리 생성
-        query = db.query(Report).options(
-            joinedload(Report.photos),
-            joinedload(Report.comments)
+        query = db.query(Contact).options(
+            joinedload(Contact.photos),
+            joinedload(Contact.comments)
         )
         
                 # 로그인한 사용자가 있는 경우 권한 체크 (Profiles 테이블에서 확인)
@@ -80,41 +80,41 @@ def get_reports(
                 is_admin = False
         
         # 필터 조건 추가
-        if report_type:
-            query = query.filter(Report.report_type == report_type)
+        if contact_type:
+            query = query.filter(Contact.contact_type == contact_type)
         if status:
-            query = query.filter(Report.status == status)
+            query = query.filter(Contact.status == status)
         if occurrence_date_from:
-            query = query.filter(Report.occurrence_date >= occurrence_date_from)
+            query = query.filter(Contact.occurrence_date >= occurrence_date_from)
         if occurrence_date_to:
-            query = query.filter(Report.occurrence_date <= occurrence_date_to)
+            query = query.filter(Contact.occurrence_date <= occurrence_date_to)
         
-        # reporter_id 필터 (admin이 아닌 경우에만 적용)
+        # creator_id 필터 (admin이 아닌 경우에만 적용)
         if not is_admin and current_user:
             # 일반 사용자는 자신의 리포트만 조회
-            query = query.filter(Report.reporter_id == current_user["id"])
+            query = query.filter(Contact.creator_id == current_user["id"])
         # 최신순으로 정렬
-        query = query.order_by(Report.created_at.desc())
+        query = query.order_by(Contact.created_at.desc())
         
         # 전체 항목 수 계산
         total_count = query.count()
         
         # 페이지네이션 적용
-        reports = query.offset((page - 1) * page_size).limit(page_size).all()
+        contact = query.offset((page - 1) * page_size).limit(page_size).all()
         
         # 전체 페이지 수 계산
         total_pages = (total_count + page_size - 1) // page_size
         
         # 응답 데이터 준비
         result = []
-        for report in reports:
-            # reporter 정보 조회
-            reporter = db.query(Profiles).filter(Profiles.id == report.reporter_id).first()
-            reporter_name = reporter.name if reporter else None
+        for contact in contact:
+            # creator 정보 조회
+            creator = db.query(Profiles).filter(Profiles.id == contact.creator_id).first()
+            creator_name = creator.name if creator else None
             
             # comments의 operator 정보 조회
             comments_with_operators = []
-            for comment in report.comments:
+            for comment in contact.comments:
                 operator = db.query(Profiles).filter(Profiles.id == comment.operator_id).first()
                 operator_name = operator.name if operator else None
                 
@@ -129,16 +129,16 @@ def get_reports(
                     }
                 })
             
-            report_data = {
-                "id": str(report.id),
-                "reporter_id": str(report.reporter_id),
-                "occurrence_date": report.occurrence_date.strftime("%Y-%m-%d") if report.occurrence_date else None,
-                "report_type": report.report_type,
-                "report_content": report.report_content,
-                "status": report.status,
-                "created_at": report.created_at.strftime("%Y-%m-%d %H:%M:%S") if report.created_at else None,
-                "photos_count": len(report.photos) if report.photos else 0,
-                "comments_count": len(report.comments) if report.comments else 0,
+            contact_data = {
+                "id": str(contact.id),
+                "creator_id": str(contact.creator_id),
+                "occurrence_date": contact.occurrence_date.strftime("%Y-%m-%d") if contact.occurrence_date else None,
+                "contact_type": contact.contact_type,
+                "contact_content": contact.contact_content,
+                "status": contact.status,
+                "created_at": contact.created_at.strftime("%Y-%m-%d %H:%M:%S") if contact.created_at else None,
+                "photos_count": len(contact.photos) if contact.photos else 0,
+                "comments_count": len(contact.comments) if contact.comments else 0,
                 "photos": [
                     {
                         "id": str(photo.id),
@@ -147,15 +147,15 @@ def get_reports(
                         "uploaded_at": photo.uploaded_at.isoformat() + "Z" if photo.uploaded_at else None,
                         "thumbnail_url": photo.photo_url,
                         "is_public": True
-                    } for photo in report.photos
-                ] if report.photos else [],
+                    } for photo in contact.photos
+                ] if contact.photos else [],
                 "comments": comments_with_operators,
-                "reporter": {
-                    "id": str(report.reporter_id),
-                    "name": reporter_name,
+                "creator": {
+                    "id": str(contact.creator_id),
+                    "name": creator_name,
                 }
             }
-            result.append(report_data)
+            result.append(contact_data)
         
 
         
@@ -170,30 +170,30 @@ def get_reports(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"리포트 목록 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"レポート一覧取得中にエラーが発生しました: {str(e)}")
 
-@router.get("/{report_id}")
-def get_report(
-    report_id: str,
+@router.get("/{contact_id}")
+def get_contact(
+    contact_id: str,
     db: Session = Depends(get_db)
 ):
     """특정 리포트 상세 정보 조회"""
     try:
-        report = db.query(Report).options(
-            joinedload(Report.photos),
-            joinedload(Report.comments)
-        ).filter(Report.id == report_id).first()
+        contact = db.query(Contact).options(
+            joinedload(Contact.photos),
+            joinedload(Contact.comments)
+        ).filter(Contact.id == contact_id).first()
         
-        if not report:
-            raise HTTPException(status_code=404, detail="리포트를 찾을 수 없습니다")
+        if not contact:
+            raise HTTPException(status_code=404, detail="レポートが見つかりません")
         
-        # reporter 정보 조회
-        reporter = db.query(Profiles).filter(Profiles.id == report.reporter_id).first()
-        reporter_name = reporter.name if reporter else None
+        # creator 정보 조회
+        creator = db.query(Profiles).filter(Profiles.id == contact.creator_id).first()
+        creator_name = creator.name if creator else None
         
         # comments의 operator 정보 조회
         comments_with_operators = []
-        for comment in report.comments:
+        for comment in contact.comments:
             operator = db.query(Profiles).filter(Profiles.id == comment.operator_id).first()
             operator_name = operator.name if operator else None
             
@@ -209,19 +209,19 @@ def get_report(
             })
         
         # 응답 데이터 준비
-        report_data = {
-            "id": str(report.id),
-            "reporter_id": str(report.reporter_id),
-            "occurrence_date": report.occurrence_date.strftime("%Y-%m-%d") if report.occurrence_date else None,
-            "report_type": report.report_type,
-            "report_content": report.report_content,
-            "status": report.status,
-            "created_at": report.created_at.strftime("%Y-%m-%d %H:%M:%S") if report.created_at else None,
-            "reporter": {
-                "id": str(report.reporter_id),
-                "name": reporter_name,
+        contact_data = {
+            "id": str(contact.id),
+            "creator_id": str(contact.creator_id),
+            "occurrence_date": contact.occurrence_date.strftime("%Y-%m-%d") if contact.occurrence_date else None,
+            "contact_type": contact.contact_type,
+            "contact_content": contact.contact_content,
+            "status": contact.status,
+            "created_at": contact.created_at.strftime("%Y-%m-%d %H:%M:%S") if contact.created_at else None,
+            "creator": {
+                "id": str(contact.creator_id),
+                "name": creator_name,
             },
-            "photos_count": len(report.photos) if report.photos else 0,  # 사진 개수
+            "photos_count": len(contact.photos) if contact.photos else 0,  # 사진 개수
             "photos": [
                 {
                     "id": str(photo.id),
@@ -231,67 +231,67 @@ def get_report(
                     "file_size": None,  # 필요시 파일 크기 추가 가능
                     "thumbnail_url": photo.photo_url,  # 썸네일 URL (필요시 별도 생성)
                     "is_public": True  # 공개 여부
-                } for photo in report.photos
-            ] if report.photos else [],
+                } for photo in contact.photos
+            ] if contact.photos else [],
             "comments": comments_with_operators
         }
         
-        return report_data
+        return contact_data
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"리포트 상세 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"レポート詳細取得中にエラーが発生しました: {str(e)}")
 
 @router.post("/", status_code=201)
-def create_report(
-    report: ReportCreate,
+def create_contact(
+    contact: ContactCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """새로운 리포트 생성"""
     try:
         # 새 리포트 객체 생성
-        new_report = Report(
+        new_contact = Contact(
             id=str(uuid.uuid4()),
-            reporter_id=current_user["id"],
-            occurrence_date=report.occurrence_date,
-            report_type=report.report_type,
-            report_content=report.report_content,
+            creator_id=current_user["id"],
+            occurrence_date=contact.occurrence_date,
+            contact_type=contact.contact_type,
+            contact_content=contact.contact_content,
             status="pending"
         )
         
-        db.add(new_report)
+        db.add(new_contact)
         db.commit()
-        db.refresh(new_report)
+        db.refresh(new_contact)
         
         # 데이터베이스 로그 생성
         try:
             create_database_log(
                 db=db,
-                table_name="reports",
-                record_id=str(new_report.id),
+                table_name="contact",
+                record_id=str(new_contact.id),
                 action="CREATE",
                 user_id=current_user["id"] if current_user else None,
                 new_values={
-                    "reporter_id": str(new_report.reporter_id),
-                    "occurrence_date": new_report.occurrence_date.strftime("%Y-%m-%d") if new_report.occurrence_date else None,
-                    "report_type": new_report.report_type,
-                    "report_content": new_report.report_content,
-                    "status": new_report.status
+                    "creator_id": str(new_contact.creator_id),
+                    "occurrence_date": new_contact.occurrence_date.strftime("%Y-%m-%d") if new_contact.occurrence_date else None,
+                    "contact_type": new_contact.contact_type,
+                    "contact_content": new_contact.contact_content,
+                    "status": new_contact.status
                 },
-                changed_fields=["reporter_id", "occurrence_date", "report_type", "report_content", "status"],
-                note=f"새로운 리포트 생성 - {new_report.report_type}: {new_report.report_content[:50]}..."
+                changed_fields=["creator_id", "occurrence_date", "contact_type", "contact_content", "status"],
+                note=f"新規レポート作成 - {new_contact.contact_type}: {new_contact.contact_content[:50]}..."
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
             "message": "리포트가 성공적으로 생성되었습니다",
-            "report": {
-                "id": str(new_report.id),
-                "reporter_id": str(new_report.reporter_id),
-                "occurrence_date": new_report.occurrence_date.strftime("%Y-%m-%d") if new_report.occurrence_date else None,
-                "report_type": new_report.report_type,
-                "status": new_report.status
+            "contact": {
+                "id": str(new_contact.id),
+                "creator_id": str(new_contact.creator_id),
+                "occurrence_date": new_contact.occurrence_date.strftime("%Y-%m-%d") if new_contact.occurrence_date else None,
+                "contact_type": new_contact.contact_type,
+                "status": new_contact.status
             }
         }
         
@@ -300,10 +300,10 @@ def create_report(
         raise HTTPException(status_code=500, detail=f"리포트 생성 중 오류가 발생했습니다: {str(e)}")
 
 @router.post("/with-photos", status_code=201)
-async def create_report_with_photos(
+async def create_contact_with_photos(
     occurrence_date: str = Form(...),
-    report_type: str = Form(...),
-    report_content: str = Form(...),
+    contact_type: str = Form(...),
+    contact_content: str = Form(...),
     photos: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -317,18 +317,18 @@ async def create_report_with_photos(
             raise HTTPException(status_code=400, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)")
         
         # 새 리포트 객체 생성
-        new_report = Report(
+        new_contact = Contact(
             id=str(uuid.uuid4()),
-            reporter_id=current_user["id"],
+            creator_id=current_user["id"],
             occurrence_date=parsed_date,
-            report_type=report_type,
-            report_content=report_content,
+            contact_type=contact_type,
+            contact_content=contact_content,
             status="pending"
         )
         
-        db.add(new_report)
+        db.add(new_contact)
         db.commit()
-        db.refresh(new_report)
+        db.refresh(new_contact)
         
         # 사진 업로드 처리
         uploaded_photos = []
@@ -339,7 +339,7 @@ async def create_report_with_photos(
                     # 파일 확장자 검사
                     file_extension = photo.filename.split(".")[-1].lower()
                     if file_extension not in ["jpg", "jpeg", "png", "gif"]:
-                        print(f"지원하지 않는 파일 형식: {file_extension}")
+                        print(f"サポートされていないファイル形式: {file_extension}")
                         continue
                     
                     # 파일 크기 검사 (5MB)
@@ -348,7 +348,7 @@ async def create_report_with_photos(
                     while chunk := await photo.read(chunk_size):
                         file_size += len(chunk)
                         if file_size > 5 * 1024 * 1024:  # 5MB
-                            print(f"파일 크기 초과: {file_size} bytes")
+                            print(f"ファイルサイズ超過: {file_size} bytes")
                             break
                     
                     # 파일을 다시 처음으로 되돌림
@@ -358,24 +358,24 @@ async def create_report_with_photos(
                     random_filename = generate_random_filename(photo.filename)
                     
                     # Supabase Storage에 파일 업로드
-                    file_path = f"report_photos/{new_report.id}/{random_filename}"
+                    file_path = f"contact_photos/{new_contact.id}/{random_filename}"
                     file_content = await photo.read()
                     
                     try:
                         # Supabase Storage에 파일 업로드
-                        result = supabase.storage.from_("report_photos").upload(
+                        result = supabase.storage.from_("contact_photos").upload(
                             file_path,
                             file_content,
                             {"content-type": photo.content_type}
                         )
                         
                         # 파일 URL 생성
-                        file_url = supabase.storage.from_("report_photos").get_public_url(file_path)
+                        file_url = supabase.storage.from_("contact_photos").get_public_url(file_path)
                         
                         # 데이터베이스에 사진 정보 저장
-                        new_photo = ReportPhoto(
+                        new_photo = ContactPhoto(
                             id=str(uuid.uuid4()),
-                            report_id=str(new_report.id),
+                            contact_id=str(new_contact.id),
                             photo_url=file_url
                         )
                         db.add(new_photo)
@@ -386,11 +386,11 @@ async def create_report_with_photos(
                         })
                         
                     except Exception as storage_error:
-                        print(f"사진 업로드 실패: {storage_error}")
+                        print(f"写真アップロード失敗: {storage_error}")
                         continue
                         
                 except Exception as photo_error:
-                    print(f"사진 처리 중 오류: {photo_error}")
+                    print(f"写真処理中にエラー: {photo_error}")
                     continue
             
             # 사진 정보 커밋
@@ -400,32 +400,32 @@ async def create_report_with_photos(
         try:
             create_database_log(
                 db=db,
-                table_name="reports",
-                record_id=str(new_report.id),
+                table_name="contact",
+                record_id=str(new_contact.id),
                 action="CREATE",
                 user_id=current_user["id"] if current_user else None,
                 new_values={
-                    "reporter_id": str(new_report.reporter_id),
-                    "occurrence_date": new_report.occurrence_date.strftime("%Y-%m-%d") if new_report.occurrence_date else None,
-                    "report_type": new_report.report_type,
-                    "report_content": new_report.report_content,
-                    "status": new_report.status,
+                    "creator_id": str(new_contact.creator_id),
+                    "occurrence_date": new_contact.occurrence_date.strftime("%Y-%m-%d") if new_contact.occurrence_date else None,
+                    "contact_type": new_contact.contact_type,
+                    "contact_content": new_contact.contact_content,
+                    "status": new_contact.status,
                     "photos_count": len(uploaded_photos)
                 },
-                changed_fields=["reporter_id", "occurrence_date", "report_type", "report_content", "status"],
-                note=f"사진과 함께 리포트 생성 - {new_report.report_type}: {new_report.report_content[:50]}... (사진 {len(uploaded_photos)}개)"
+                changed_fields=["creator_id", "occurrence_date", "contact_type", "contact_content", "status"],
+                note=f"사진과 함께 리포트 생성 - {new_contact.contact_type}: {new_contact.contact_content[:50]}... (사진 {len(uploaded_photos)}개)"
             )
         except Exception as log_error:
-            print(f"로그 생성 중 오류: {log_error}")
+            print(f"ログ作成中にエラー: {log_error}")
         
         return {
-            "message": f"리포트가 성공적으로 생성되었습니다. 사진 {len(uploaded_photos)}개가 첨부되었습니다.",
-            "report": {
-                "id": str(new_report.id),
-                "reporter_id": str(new_report.reporter_id),
-                "occurrence_date": new_report.occurrence_date.strftime("%Y-%m-%d") if new_report.occurrence_date else None,
-                "report_type": new_report.report_type,
-                "status": new_report.status
+            "message": f"レポートが正常に作成されました。写真{len(uploaded_photos)}枚が添付されました。",
+            "contact": {
+                "id": str(new_contact.id),
+                "creator_id": str(new_contact.creator_id),
+                "occurrence_date": new_contact.occurrence_date.strftime("%Y-%m-%d") if new_contact.occurrence_date else None,
+                "contact_type": new_contact.contact_type,
+                "status": new_contact.status
             },
             "photos": uploaded_photos,
             "total_photos": len(uploaded_photos)
@@ -435,129 +435,134 @@ async def create_report_with_photos(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"리포트 생성 중 오류가 발생했습니다: {str(e)}")
 
-@router.put("/{report_id}")
-def update_report(
-    report_id: str,
-    report_update: ReportUpdate,
+@router.put("/{contact_id}")
+def update_contact(
+    contact_id: str,
+    contact_update: ContactUpdate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """리포트 정보 수정"""
     try:
         # 리포트 존재 여부 확인
-        report = db.query(Report).filter(Report.id == report_id).first()
-        if not report:
-            raise HTTPException(status_code=404, detail="리포트를 찾을 수 없습니다")
+        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="レポートが見つかりません")
         
         # 기존 값 저장 (로그용)
         old_values = {
-            "occurrence_date": report.occurrence_date.strftime("%Y-%m-%d") if report.occurrence_date else None,
-            "report_type": report.report_type,
-            "report_content": report.report_content,
-            "status": report.status
+            "occurrence_date": contact.occurrence_date.strftime("%Y-%m-%d") if contact.occurrence_date else None,
+            "contact_type": contact.contact_type,
+            "contact_content": contact.contact_content,
+            "status": contact.status
         }
         
         # 리포트 정보 업데이트
-        update_data = report_update.dict(exclude_unset=True)
+        update_data = contact_update.dict(exclude_unset=True)
         for field, value in update_data.items():
-            setattr(report, field, value)
+            setattr(contact, field, value)
         
         db.commit()
-        db.refresh(report)
+        db.refresh(contact)
         
         # 데이터베이스 로그 생성
         try:
             create_database_log(
                 db=db,
-                table_name="reports",
-                record_id=str(report.id),
+                table_name="contact",
+                record_id=str(contact.id),
                 action="UPDATE",
                 user_id=current_user["id"] if current_user else None,
                 old_values=old_values,
                 new_values={
-                    "occurrence_date": report.occurrence_date.strftime("%Y-%m-%d") if report.occurrence_date else None,
-                    "report_type": report.report_type,
-                    "report_content": report.report_content,
-                    "status": report.status
+                    "occurrence_date": contact.occurrence_date.strftime("%Y-%m-%d") if contact.occurrence_date else None,
+                    "contact_type": contact.contact_type,
+                    "contact_content": contact.contact_content,
+                    "status": contact.status
                 },
                 changed_fields=list(update_data.keys()),
-                note=f"리포트 정보 수정 - {report.report_type}: {report.report_content[:50]}..."
+                note=f"レポート情報更新 - {contact.contact_type}: {contact.contact_content[:50]}..."
             )
         except Exception as log_error:
-            print(f"로그 생성 중 오류: {log_error}")
+            print(f"ログ作成中にエラー: {log_error}")
         
         return {
-            "message": "리포트가 성공적으로 수정되었습니다",
-            "report": {
-                "id": str(report.id),
-                "reporter_id": str(report.reporter_id),
-                "occurrence_date": report.occurrence_date.strftime("%Y-%m-%d") if report.occurrence_date else None,
-                "report_type": report.report_type,
-                "status": report.status
+            "message": "レポートが正常に更新されました",
+            "contact": {
+                "id": str(contact.id),
+                "creator_id": str(contact.creator_id),
+                "occurrence_date": contact.occurrence_date.strftime("%Y-%m-%d") if contact.occurrence_date else None,
+                "contact_type": contact.contact_type,
+                "status": contact.status
             }
         }
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"리포트 수정 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"レポート更新中にエラーが発生しました: {str(e)}")
 
-@router.delete("/{report_id}")
-def delete_report(
-    report_id: str,
+@router.put("/{contact_id}/cancel")
+def cancel_contact(
+    contact_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """리포트 삭제"""
+    """리포트 취소 (상태를 cancel로 변경)"""
     try:
         # 리포트 존재 여부 확인
-        report = db.query(Report).filter(Report.id == report_id).first()
-        if not report:
-            raise HTTPException(status_code=404, detail="리포트를 찾을 수 없습니다")
+        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="レポートが見つかりません")
         
-        # 삭제 전 데이터 저장 (로그용)
-        deleted_data = {
-            "id": str(report.id),
-            "reporter_id": str(report.reporter_id),
-            "occurrence_date": report.occurrence_date.strftime("%Y-%m-%d") if report.occurrence_date else None,
-            "report_type": report.report_type,
-            "report_content": report.report_content,
-            "status": report.status
-        }
+        # 이미 취소된 리포트인지 확인
+        if contact.status == "cancel":
+            raise HTTPException(status_code=400, detail="既にキャンセルされたレポートです")
         
-        # 리포트 삭제 (CASCADE로 인해 관련된 photos와 comments도 자동 삭제)
-        db.delete(report)
+        # 기존 상태 저장 (로그용)
+        old_status = contact.status
+        
+        # 리포트 상태를 cancel로 변경
+        contact.status = "cancel"
+        
         db.commit()
+        db.refresh(contact)
         
         # 데이터베이스 로그 생성
         try:
             create_database_log(
                 db=db,
-                table_name="reports",
-                record_id=deleted_data["id"],
-                action="DELETE",
+                table_name="contact",
+                record_id=str(contact.id),
+                action="UPDATE",
                 user_id=current_user["id"] if current_user else None,
-                old_values=deleted_data,
-                note=f"리포트 삭제 - {deleted_data['report_type']}: {deleted_data['report_content'][:50]}..."
+                old_values={"status": old_status},
+                new_values={"status": "cancel"},
+                changed_fields=["status"],
+                note=f"レポートキャンセル - {contact.contact_type}: {contact.contact_content[:50]}... (状態: {old_status} → cancel)"
             )
         except Exception as log_error:
-            print(f"로그 생성 중 오류: {log_error}")
+            print(f"ログ作成中にエラー: {log_error}")
         
         return {
-            "message": "리포트가 성공적으로 삭제되었습니다",
-            "deleted_report_id": report_id
+            "message": "レポートが正常にキャンセルされました",
+            "contact": {
+                "id": str(contact.id),
+                "status": contact.status,
+                "cancelled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
         }
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"리포트 삭제 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"レポートキャンセル中にエラーが発生しました: {str(e)}")
 
 
-# ===== Report Comments 관련 API들 =====
+# ===== Contact Comments 관련 API들 =====
 
-@router.post("/{report_id}/comments")
-def create_report_comment(
-    report_id: str,
-    comment: ReportCommentCreate,
+@router.post("/{contact_id}/comments")
+def create_contact_comment(
+    contact_id: str,
+    comment: ContactCommentCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -569,150 +574,150 @@ def create_report_comment(
         # comment_text가 빈 문자열인 경우 코멘트 생성하지 않고 상태만 업데이트
         if comment_text == "":
             # 리포트 존재 여부 확인
-            report = db.query(Report).filter(Report.id == report_id).first()
-            if not report:
-                raise HTTPException(status_code=404, detail="리포트를 찾을 수 없습니다")
+            contact = db.query(Contact).filter(Contact.id == contact_id).first()
+            if not contact:
+                raise HTTPException(status_code=404, detail="レポートが見つかりません")
             
             # comment_type이 상태 값인 경우 보고서 상태만 업데이트
-            old_status = report.status
+            old_status = contact.status
             if comment.comment_type in ["pending", "in_progress", "completed", "rejected"]:
                 # comment_type을 직접 상태 값으로 사용
                 new_status = comment.comment_type
                 
                 # 보고서 상태 업데이트
-                report.status = new_status
+                contact.status = new_status
                 
                 db.commit()
-                db.refresh(report)
+                db.refresh(contact)
                 
                 # 상태 변경 로그 (상태가 변경된 경우)
-                if old_status != report.status:
+                if old_status != contact.status:
                     try:
                         create_database_log(
                             db=db,
-                            table_name="reports",
-                            record_id=str(report.id),
+                            table_name="contact",
+                            record_id=str(contact.id),
                             action="UPDATE",
                             user_id=current_user["id"] if current_user else None,
                             old_values={"status": old_status},
-                            new_values={"status": report.status},
+                            new_values={"status": contact.status},
                             changed_fields=["status"],
-                            note=f"리포트 상태 변경 - {old_status} → {report.status} (코멘트 없음)"
+                            note=f"レポート状態変更 - {old_status} → {contact.status} (コメントなし)"
                         )
                     except Exception as log_error:
                         print(f"로그 생성 중 오류: {log_error}")
                 
                 return {
-                    "message": "리포트 상태가 업데이트되었습니다 (코멘트 없음)",
+                    "message": "レポート状態が更新されました (コメントなし)",
                     "comment": None,
                     "status_updated": True,
                     "old_status": old_status,
-                    "new_status": report.status,
-                    "report": {
-                        "id": str(report.id),
-                        "status": report.status,
-                        "updated_at": report.updated_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(report, 'updated_at') and report.updated_at else None
+                    "new_status": contact.status,
+                    "contact": {
+                        "id": str(contact.id),
+                        "status": contact.status,
+                        "updated_at": contact.updated_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(contact, 'updated_at') and contact.updated_at else None
                     }
                 }
             else:
                 # 상태 업데이트도 아닌 경우 아무것도 하지 않음
                 return {
-                    "message": "코멘트 내용이 없어 아무것도 처리되지 않았습니다",
+                    "message": "コメント内容がないため何も処理されませんでした",
                     "comment": None,
                     "status_updated": False,
                     "old_status": None,
                     "new_status": None,
-                    "report": None
+                    "contact": None
                 }
         
         # 리포트 존재 여부 확인
-        report = db.query(Report).filter(Report.id == report_id).first()
-        if not report:
-            raise HTTPException(status_code=404, detail="리포트를 찾을 수 없습니다")
+        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="レポートが見つかりません")
         
         # 새 코멘트 객체 생성
-        new_comment = ReportComment(
+        new_comment = ContactComment(
             id=str(uuid.uuid4()),
-            report_id=report_id,
+            contact_id=contact_id,
             operator_id=current_user["id"],
             comment=comment_text,  # 처리된 comment 텍스트 사용
         )
         
         # comment_type이 상태 값인 경우 보고서 상태 업데이트
-        old_status = report.status
+        old_status = contact.status
         if comment.comment_type in ["pending", "in_progress", "completed", "rejected"]:
             # comment_type을 직접 상태 값으로 사용
             new_status = comment.comment_type
             
             # 보고서 상태 업데이트
-            report.status = new_status
+            contact.status = new_status
         
         db.add(new_comment)
         db.commit()
         db.refresh(new_comment)
-        db.refresh(report)
+        db.refresh(contact)
         
         # 데이터베이스 로그 생성
         try:
             # 코멘트 로그
             create_database_log(
                 db=db,
-                table_name="report_comments",
+                table_name="contact_comments",
                 record_id=str(new_comment.id),
                 action="CREATE",
                 user_id=current_user["id"] if current_user else None,
                 new_values={
-                    "report_id": report_id,
+                    "contact_id": contact_id,
                     "operator_id": str(current_user["id"]),
                     "comment": comment_text,
                     "comment_type": comment.comment_type
                 },
-                changed_fields=["report_id", "operator_id", "comment", "comment_type"],
-                note=f"리포트 코멘트 추가 - {report.report_type}: {comment_text[:50] if comment_text else '내용 없음'}..."
+                changed_fields=["contact_id", "operator_id", "comment", "comment_type"],
+                note=f"レポートコメント追加 - {contact.contact_type}: {comment_text[:50] if comment_text else '内容なし'}..."
             )
             
             # 상태 변경 로그 (상태가 변경된 경우)
-            if comment.comment_type in ["pending", "in_progress", "completed", "rejected"] and old_status != report.status:
+            if comment.comment_type in ["pending", "in_progress", "completed", "rejected"] and old_status != contact.status:
                 create_database_log(
                     db=db,
-                    table_name="reports",
-                    record_id=str(report.id),
+                    table_name="contact",
+                    record_id=str(contact.id),
                     action="UPDATE",
                     user_id=current_user["id"] if current_user else None,
                     old_values={"status": old_status},
-                    new_values={"status": report.status},
+                    new_values={"status": contact.status},
                     changed_fields=["status"],
-                    note=f"리포트 상태 변경 - {old_status} → {report.status} (코멘트: {comment_text[:30] if comment_text else '내용 없음'}...)"
+                    note=f"レポート状態変更 - {old_status} → {contact.status} (コメント: {comment_text[:30] if comment_text else '内容なし'}...)"
                 )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "리포트 코멘트가 성공적으로 추가되었습니다",
+            "message": "レポートコメントが正常に追加されました",
             "comment": {
                 "id": str(new_comment.id),
-                "report_id": report_id,
+                "contact_id": contact_id,
                 "operator_id": str(new_comment.operator_id),
                 "comment": new_comment.comment,
                 "comment_type": comment.comment_type,
                 "created_at": new_comment.created_at.isoformat() + "Z" if new_comment.created_at else None
             },
-            "status_updated": comment.comment_type in ["pending", "in_progress", "completed", "rejected"] and old_status != report.status,
+            "status_updated": comment.comment_type in ["pending", "in_progress", "completed", "rejected"] and old_status != contact.status,
             "old_status": old_status if comment.comment_type in ["pending", "in_progress", "completed", "rejected"] else None,
-            "new_status": report.status if comment.comment_type in ["pending", "in_progress", "completed", "rejected"] else None,
-            "report": {
-                "id": str(report.id),
-                "status": report.status,
-                "updated_at": report.updated_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(report, 'updated_at') and report.updated_at else None
+            "new_status": contact.status if comment.comment_type in ["pending", "in_progress", "completed", "rejected"] else None,
+            "contact": {
+                "id": str(contact.id),
+                "status": contact.status,
+                "updated_at": contact.updated_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(contact, 'updated_at') and contact.updated_at else None
             }
         }
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"코멘트 추가 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"コメント追加中にエラーが発生しました: {str(e)}")
 
 @router.delete("/comments/{comment_id}")
-def delete_report_comment(
+def delete_contact_comment(
     comment_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -720,14 +725,14 @@ def delete_report_comment(
     """리포트 코멘트 삭제"""
     try:
         # 코멘트 존재 여부 확인
-        comment = db.query(ReportComment).filter(ReportComment.id == comment_id).first()
+        comment = db.query(ContactComment).filter(ContactComment.id == comment_id).first()
         if not comment:
-            raise HTTPException(status_code=404, detail="코멘트를 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="コメントが見つかりません")
         
         # 삭제 전 데이터 저장 (로그용)
         deleted_data = {
             "id": str(comment.id),
-            "report_id": str(comment.report_id),
+            "contact_id": str(comment.contact_id),
             "operator_id": str(comment.operator_id),
             "comment": comment.comment
         }
@@ -740,67 +745,67 @@ def delete_report_comment(
         try:
             create_database_log(
                 db=db,
-                table_name="report_comments",
+                table_name="contact_comments",
                 record_id=deleted_data["id"],
                 action="DELETE",
                 user_id=current_user["id"] if current_user else None,
                 old_values=deleted_data,
-                note=f"리포트 코멘트 삭제 - {deleted_data['comment'][:50]}..."
+                note=f"レポートコメント削除 - {deleted_data['comment'][:50]}..."
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "리포트 코멘트가 성공적으로 삭제되었습니다",
+            "message": "レポートコメントが正常に削除されました",
             "deleted_comment_id": comment_id
         }
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"코멘트 삭제 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"コメント削除中にエラーが発生しました: {str(e)}")
 
 # ===== 통계 및 대시보드 API들 =====
 
 @router.get("/statistics/overview")
-def get_reports_statistics(
+def get_contact_statistics(
     db: Session = Depends(get_db)
 ):
     """리포트 통계 개요"""
     try:
         # 전체 리포트 수
-        total_reports = db.query(Report).count()
+        total_contact = db.query(Contact).count()
         
         # 상태별 리포트 수
         status_counts = db.query(
-            Report.status,
-            func.count(Report.id)
-        ).group_by(Report.status).all()
+            Contact.status,
+            func.count(Contact.id)
+        ).group_by(Contact.status).all()
         
         # 타입별 리포트 수
         type_counts = db.query(
-            Report.report_type,
-            func.count(Report.id)
-        ).group_by(Report.report_type).all()
+            Contact.contact_type,
+            func.count(Contact.id)
+        ).group_by(Contact.contact_type).all()
         
         # 최근 30일 리포트 수
         thirty_days_ago = datetime.now().date() - timedelta(days=30)
-        recent_reports = db.query(Report).filter(
-            Report.created_at >= thirty_days_ago
+        recent_contact = db.query(Contact).filter(
+            Contact.created_at >= thirty_days_ago
         ).count()
         
         return {
-            "total_reports": total_reports,
-            "recent_reports_30_days": recent_reports,
+            "total_contact": total_contact,
+            "recent_contact_30_days": recent_contact,
             "status_distribution": dict(status_counts),
             "type_distribution": dict(type_counts),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"통계 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"統計取得中にエラーが発生しました: {str(e)}")
 
 @router.get("/statistics/monthly")
-def get_monthly_reports_statistics(
+def get_monthly_contact_statistics(
     year: int = Query(..., description="조회할 연도"),
     db: Session = Depends(get_db)
 ):
@@ -810,24 +815,24 @@ def get_monthly_reports_statistics(
         
         for month in range(1, 13):
             # 해당 월의 리포트 수
-            month_reports = db.query(Report).filter(
-                func.extract('year', Report.created_at) == year,
-                func.extract('month', Report.created_at) == month
+            month_contact = db.query(Contact).filter(
+                func.extract('year', Contact.created_at) == year,
+                func.extract('month', Contact.created_at) == month
             ).count()
             
             # 해당 월의 상태별 리포트 수
             month_status_counts = db.query(
-                Report.status,
-                func.count(Report.id)
+                Contact.status,
+                func.count(Contact.id)
             ).filter(
-                func.extract('year', Report.created_at) == year,
-                func.extract('month', Report.created_at) == month
-            ).group_by(Report.status).all()
+                func.extract('year', Contact.created_at) == year,
+                func.extract('month', Contact.created_at) == month
+            ).group_by(Contact.status).all()
             
             monthly_stats.append({
                 "year": year,
                 "month": month,
-                "total_reports": month_reports,
+                "total_contact": month_contact,
                 "status_distribution": dict(month_status_counts)
             })
         
@@ -837,4 +842,4 @@ def get_monthly_reports_statistics(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"월별 통계 조회 중 오류가 발생했습니다: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"月別統計取得中にエラーが発生しました: {str(e)}") 

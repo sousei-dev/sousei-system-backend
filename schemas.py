@@ -1089,37 +1089,37 @@ class MonthlyItemSortOrderUpdate(BaseModel):
             }
         }
 
-# ===== Report 관련 스키마들 =====
+# ===== Contact 관련 스키마들 =====
 
-class ReportCreate(BaseModel):
+class ContactCreate(BaseModel):
     occurrence_date: date
-    report_type: str = Field(..., description="보고 종류: defect/claim/other")
-    report_content: str = Field(..., description="보고 내용")
+    contact_type: str = Field(..., description="連絡 種類: defect/claim/other")
+    contact_content: str = Field(..., description="連絡 内容")
 
-class ReportCreateWithPhotos(BaseModel):
+class ContactCreateWithPhotos(BaseModel):
     occurrence_date: date
-    report_type: str = Field(..., description="보고 종류: defect/claim/other")
-    report_content: str = Field(..., description="보고 내용")
-    photos: Optional[List[Any]] = Field(None, description="첨부할 사진들")
+    contact_type: str = Field(..., description="連絡 種類: defect/claim/other")
+    contact_content: str = Field(..., description="連絡 内容")
+    photos: Optional[List[Any]] = Field(None, description="添付する写真")
 
-class ReportUpdate(BaseModel):
+class ContactUpdate(BaseModel):
     occurrence_date: Optional[date] = None
-    report_type: Optional[str] = None
-    report_content: Optional[str] = None
+    contact_type: Optional[str] = None
+    contact_content: Optional[str] = None
     status: Optional[str] = Field(None, description="상태: pending/in_progress/completed")
 
-class ReportResponse(BaseModel):
+class ContactResponse(BaseModel):
     id: str
-    reporter_id: str
+    creator_id: str
     occurrence_date: date
-    report_type: str
-    report_content: str
+    contact_type: str
+    contact_content: str
     status: str
     created_at: datetime
 
-class ReportPhotoCreate(BaseModel):
+class ContactPhotoCreate(BaseModel):
     photo_url: str
 
-class ReportCommentCreate(BaseModel):
+class ContactCommentCreate(BaseModel):
     comment: Optional[str] = Field(None, description="코멘트 내용")
     comment_type: str = Field(..., description="코멘트 유형: pending/in_progress/completed/rejected(상태 업데이트), general(일반 코멘트), instruction(지시사항)")

@@ -21,9 +21,9 @@ from models import Base, Company, Student, BillingMonthlyItem, Grade
 from utils.dependencies import get_current_user
 
 # 라우터 임포트
-from routers import auth, residents, students, billing, elderly, companies, grades, buildings, rooms
+from routers import auth, contact, residents, students, billing, elderly, companies, grades, buildings, rooms
 from routers import users, upload, room_operations, room_charges, room_utilities, monthly_billing, elderly_care, database_logs
-from routers import invoices, monthly_utilities, reports
+from routers import invoices, monthly_utilities
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -89,7 +89,7 @@ app.include_router(database_logs.router)
 # 최종 추가된 라우터들
 app.include_router(invoices.router)
 app.include_router(residents.router)
-app.include_router(reports.router)  # Report 모델 수정 완료로 다시 활성화
+app.include_router(contact.router)  # Contact 모델 수정 완료로 다시 활성화
 # app.include_router(monthly_utilities.router)  # /rooms API가 rooms.py로 이동됨
 
 # 루트 엔드포인트
