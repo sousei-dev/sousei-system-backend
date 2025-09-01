@@ -8,12 +8,31 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import Optional, List
 import os
+import logging
 from io import BytesIO
 from urllib.parse import quote
 from dotenv import load_dotenv
 
 # .env 파일 로드
 load_dotenv()
+
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # 콘솔 출력
+        logging.FileHandler('app.log')  # 파일 출력
+    ]
+)
+
+# WebSocket 관련 로그 레벨 설정
+logging.getLogger('utils.websocket_manager').setLevel(logging.INFO)
+logging.getLogger('routers.websocket').setLevel(logging.INFO)
+logging.getLogger('routers.chat').setLevel(logging.INFO)
+
+logger = logging.getLogger(__name__)
+logger.info("=== Sousei System Backend 시작 ===")
 
 # 데이터베이스 및 모델 임포트
 from database import SessionLocal, engine
@@ -23,7 +42,7 @@ from utils.dependencies import get_current_user
 # 라우터 임포트
 from routers import auth, contact, residents, students, billing, elderly, companies, grades, buildings, rooms
 from routers import users, upload, room_operations, room_charges, room_utilities, monthly_billing, elderly_care, database_logs
-from routers import invoices, monthly_utilities
+from routers import invoices, monthly_utilities, chat, websocket
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -91,6 +110,12 @@ app.include_router(invoices.router)
 app.include_router(residents.router)
 app.include_router(contact.router)  # Contact 모델 수정 완료로 다시 활성화
 # app.include_router(monthly_utilities.router)  # /rooms API가 rooms.py로 이동됨
+
+# 채팅 라우터 추가
+app.include_router(chat.router)
+
+# WebSocket 라우터 추가
+app.include_router(websocket.router)
 
 # 루트 엔드포인트
 @app.get("/")

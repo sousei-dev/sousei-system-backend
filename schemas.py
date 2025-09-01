@@ -1123,3 +1123,125 @@ class ContactPhotoCreate(BaseModel):
 class ContactCommentCreate(BaseModel):
     comment: Optional[str] = Field(None, description="코멘트 내용")
     comment_type: str = Field(..., description="코멘트 유형: pending/in_progress/completed/rejected(상태 업데이트), general(일반 코멘트), instruction(지시사항)")
+
+# ===== 채팅 관련 스키마들 =====
+
+class ConversationCreate(BaseModel):
+    title: Optional[str] = None
+    is_group: bool = False
+    member_ids: List[str] = Field(..., description="대화 참여자 ID 목록")
+
+class ConversationUpdate(BaseModel):
+    title: Optional[str] = None
+    is_group: Optional[bool] = None
+
+class ConversationResponse(BaseModel):
+    id: str
+    title: Optional[str] = None
+    is_group: bool
+    created_by: str
+    created_at: datetime
+    member_count: int
+    participants: Optional[List[dict]] = None  # 참여자 정보 (상대방 이름, 아바타 등)
+    last_message: Optional[dict] = None
+    unread_count: Optional[int] = None
+
+class ConversationMemberCreate(BaseModel):
+    user_id: str
+    role: str = "member"  # 'member' | 'admin'
+
+class ConversationMemberUpdate(BaseModel):
+    role: Optional[str] = None
+    last_read_at: Optional[datetime] = None
+
+class ConversationMemberResponse(BaseModel):
+    conversation_id: str
+    user_id: str
+    role: str
+    joined_at: datetime
+    last_read_at: Optional[datetime] = None
+    user_info: Optional[dict] = None
+
+class MessageCreate(BaseModel):
+    body: Optional[str] = None
+    parent_id: Optional[str] = None
+    attachments: Optional[List[dict]] = None
+
+class MessageUpdate(BaseModel):
+    body: Optional[str] = None
+
+class MessageResponse(BaseModel):
+    id: str
+    conversation_id: str
+    sender_id: str
+    body: Optional[str] = None
+    parent_id: Optional[str] = None
+    created_at: datetime
+    edited_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+    
+    # 메시지 구분을 위한 필드들
+    is_own_message: Optional[bool] = None
+    message_type: Optional[str] = None  # "own" | "other"
+    alignment: Optional[str] = None     # "right" | "left"
+    
+    # 발신자 정보
+    sender_info: Optional[dict] = None
+    sender_name: Optional[str] = None
+    sender_avatar: Optional[str] = None
+    sender_role: Optional[str] = None
+    
+    # 기타 정보
+    attachments: Optional[List[dict]] = None
+    reactions: Optional[List[dict]] = None
+    is_read: Optional[bool] = None
+    
+    # 프론트엔드 처리를 위한 추가 필드
+    show_avatar: Optional[bool] = None
+    show_name: Optional[bool] = None
+    css_class: Optional[str] = None
+
+class MessageReadCreate(BaseModel):
+    message_id: str
+
+class AttachmentCreate(BaseModel):
+    bucket: str = "chat-attachments"
+    file_url: str
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+
+class AttachmentResponse(BaseModel):
+    id: str
+    message_id: str
+    bucket: str
+    file_url: str
+    original_filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    created_at: datetime
+    download_url: Optional[str] = None
+
+class ReactionCreate(BaseModel):
+    emoji: str
+
+class ReactionResponse(BaseModel):
+    message_id: str
+    user_id: str
+    emoji: str
+    created_at: datetime
+    user_info: Optional[dict] = None
+
+class ConversationListResponse(BaseModel):
+    conversations: List[ConversationResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+class MessageListResponse(BaseModel):
+    messages: List[MessageResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    conversation_info: Optional[dict] = None  # id, title, is_group, other_user_id 포함

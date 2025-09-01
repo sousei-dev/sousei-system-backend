@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean, Date, SmallInteger, UniqueConstraint, func, Text, Numeric
+from sqlalchemy import Column, String, BigInteger, Integer, DateTime, ForeignKey, Boolean, Date, SmallInteger, UniqueConstraint, func, Text, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -602,4 +602,111 @@ class ContactComment(Base):
     @property
     def operator_info(self):
         # Supabase auth.users에서 사용자 정보 조회
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+# ===== 채팅 관련 모델들 =====
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(Text, nullable=True)  # 그룹명(또는 DM이면 null 가능)
+    is_group = Column(Boolean, nullable=False, default=False)
+    created_by = Column(String, nullable=False)  # Supabase auth.users(id) 참조
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    members = relationship("ConversationMember", back_populates="conversation", cascade="all, delete-orphan")
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def creator_info(self):
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class ConversationMember(Base):
+    __tablename__ = "conversation_members"
+    
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(String, primary_key=True)  # Supabase auth.users(id) 참조
+    role = Column(String, nullable=False, default="member")  # 'member' | 'admin'
+    joined_at = Column(DateTime, default=datetime.utcnow)
+    last_read_at = Column(DateTime, nullable=True)  # 마지막 읽은 시간
+    
+    # 관계 설정
+    conversation = relationship("Conversation", back_populates="members")
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def user_info(self):
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class Message(Base):
+    __tablename__ = "messages"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    sender_id = Column(String, nullable=False)  # Supabase auth.users(id) 참조
+    body = Column(Text, nullable=True)  # 텍스트 본문
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=True)  # 스레드/답장용
+    created_at = Column(DateTime, default=datetime.utcnow)
+    edited_at = Column(DateTime, nullable=True)
+    deleted_at = Column(DateTime, nullable=True)
+    
+    # 관계 설정
+    conversation = relationship("Conversation", back_populates="messages")
+    parent_message = relationship("Message", remote_side=[id], backref="replies")
+    attachments = relationship("Attachment", back_populates="message", cascade="all, delete-orphan")
+    reactions = relationship("Reaction", back_populates="message", cascade="all, delete-orphan")
+    reads = relationship("MessageRead", back_populates="message", cascade="all, delete-orphan")
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def sender_info(self):
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class MessageRead(Base):
+    __tablename__ = "message_reads"
+    
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(String, primary_key=True)  # Supabase auth.users(id) 참조
+    read_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    message = relationship("Message", back_populates="reads")
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def user_info(self):
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    bucket = Column(String, nullable=False, default="chat-attachments")
+    file_url = Column(Text, nullable=False)  # 예: conversations/{conversation_id}/{uuid}.bin
+    original_filename = Column(Text, nullable=True)
+    mime_type = Column(String, nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    message = relationship("Message", back_populates="attachments")
+
+class Reaction(Base):
+    __tablename__ = "reactions"
+    
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(String, primary_key=True)  # Supabase auth.users(id) 참조
+    emoji = Column(String, primary_key=True)  # 예: '👍', '❤️', ':fire:'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    message = relationship("Message", back_populates="reactions")
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def user_info(self):
         return None  # 실제 구현에서는 Supabase 클라이언트로 조회

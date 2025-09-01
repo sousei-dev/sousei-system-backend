@@ -1687,12 +1687,28 @@ def delete_student_monthly_item(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """학생의 월별 관리비 항목 삭제"""
+    """학생의 월별 관리비 항목 삭제 (개선된 버전)"""
     try:
+        # 입력값 유효성 검사
+        if not student_id or not item_name or not year:
+            raise HTTPException(
+                status_code=400, 
+                detail="필수 파라미터가 누락되었습니다. student_id, item_name, year를 모두 입력해주세요."
+            )
+        
+        if year < 2000 or year > 2100:
+            raise HTTPException(
+                status_code=400, 
+                detail="연도는 2000년에서 2100년 사이여야 합니다."
+            )
+        
         # 학생 존재 여부 확인
         student = db.query(Student).filter(Student.id == student_id).first()
         if not student:
-            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다")
+            raise HTTPException(
+                status_code=404, 
+                detail="학생을 찾을 수 없습니다"
+            )
         
         # 항목 존재 여부 및 해당 학생의 항목인지 확인
         items = db.query(BillingMonthlyItem).filter(
@@ -1702,10 +1718,16 @@ def delete_student_monthly_item(
         ).all()
         
         if not items:
-            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"'{item_name}' 항목의 {year}년 데이터를 찾을 수 없습니다"
+            )
         
         # 삭제 전 데이터 저장 (로그용)
         deleted_items_data = []
+        total_amount = 0
+        months_list = []
+        
         for item in items:
             deleted_items_data.append({
                 "id": str(item.id),
@@ -1713,42 +1735,184 @@ def delete_student_monthly_item(
                 "year": item.year,
                 "month": item.month,
                 "item_name": item.item_name,
-                "amount": item.amount,
+                "amount": float(item.amount) if item.amount else 0,
                 "memo": item.memo,
                 "sort_order": item.sort_order
             })
+            total_amount += float(item.amount) if item.amount else 0
+            months_list.append(item.month)
+        
+        # 삭제 전 확인 정보
+        confirmation_info = {
+            "student_name": student.name,
+            "item_name": item_name,
+            "year": year,
+            "total_months": len(items),
+            "months": sorted(months_list),
+            "total_amount": total_amount,
+            "will_be_deleted": True
+        }
         
         # 모든 월 데이터 삭제
         deleted_count = len(items)
         for item in items:
             db.delete(item)
+        
+        # 데이터베이스 커밋
         db.commit()
         
-         # 데이터베이스 로그 생성 (각 삭제된 항목별로)
+        # 데이터베이스 로그 생성 (통합 로그)
         try:
-            for item_data in deleted_items_data:
-                create_database_log(
-                    db=db,
-                    table_name="billing_monthly_items",
-                    record_id=item_data["id"],
-                    action="DELETE",
-                    user_id=current_user["id"] if current_user else None,
-                    old_values=item_data,
-                    note=f"月別管理費項目削除 - {item_data['item_name']} ({item_data['year']}年{item_data['month']}月)"
-                )
+            create_database_log(
+                db=db,
+                table_name="billing_monthly_items",
+                record_id=f"batch_delete_{student_id}_{year}_{item_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                action="DELETE",
+                user_id=current_user["id"] if current_user else None,
+                old_values={
+                    "batch_deleted_data": {
+                        "student_id": student_id,
+                        "student_name": student.name,
+                        "item_name": item_name,
+                        "year": year,
+                        "deleted_items_count": deleted_count,
+                        "deleted_months": sorted(months_list),
+                        "total_amount": total_amount,
+                        "deleted_items": deleted_items_data
+                    }
+                },
+                changed_fields=["batch_delete"],
+                note=f"月別管理費項目一括削除 - {student.name}: {item_name} ({year}年) {deleted_count}ヶ月分を削除"
+            )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": f"'{item_name}'項目の{deleted_count}ヶ月データが正常に削除されました",
-            "student_id": student_id,
-            "item_name": item_name,
-            "deleted_count": deleted_count
+            "message": f"'{item_name}' 항목의 {deleted_count}개월 데이터가 성공적으로 삭제되었습니다",
+            "deletion_summary": {
+                "student_id": student_id,
+                "student_name": student.name,
+                "item_name": item_name,
+                "year": year,
+                "deleted_count": deleted_count,
+                "deleted_months": sorted(months_list),
+                "total_amount": total_amount,
+                "deleted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            },
+            "confirmation_info": confirmation_info
         }
         
+    except HTTPException:
+        # HTTPException은 그대로 재발생
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"항목 삭제 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"월별 관리비 항목 삭제 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@router.put("/{student_id}/monthly-items/{year}/{item_name}")
+def update_student_monthly_item_name(
+    student_id: str,
+    item_name: str,
+    year: int,
+    request: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """학생의 월별 관리비 항목명 변경"""
+    try:
+        # 새로운 항목명 추출
+        new_item_name = request.get("item_name")
+        if not new_item_name:
+            raise HTTPException(
+                status_code=400, 
+                detail="새로운 항목명(item_name)이 필요합니다"
+            )
+        
+        # 학생 존재 여부 확인
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="학생을 찾을 수 없습니다")
+        
+        # 기존 항목 존재 여부 및 해당 학생의 항목인지 확인
+        items = db.query(BillingMonthlyItem).filter(
+            BillingMonthlyItem.item_name == item_name,
+            BillingMonthlyItem.year == year,
+            BillingMonthlyItem.student_id == student_id
+        ).all()
+        
+        if not items:
+            raise HTTPException(status_code=404, detail="해당 항목을 찾을 수 없습니다")
+        
+        # 새로운 항목명이 이미 존재하는지 확인 (같은 학생, 같은 년도 내에서)
+        existing_items = db.query(BillingMonthlyItem).filter(
+            BillingMonthlyItem.item_name == new_item_name,
+            BillingMonthlyItem.year == year,
+            BillingMonthlyItem.student_id == student_id
+        ).first()
+        
+        if existing_items:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"'{new_item_name}' 항목명이 이미 {year}년에 존재합니다"
+            )
+        
+        # 변경 전 데이터 저장 (로그용)
+        old_values = {
+            "old_item_name": item_name,
+            "affected_items_count": len(items),
+            "months": [item.month for item in items]
+        }
+        
+        # 모든 월 데이터의 항목명 변경
+        updated_count = 0
+        for item in items:
+            item.item_name = new_item_name
+            updated_count += 1
+        
+        db.commit()
+        
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="billing_monthly_items",
+                record_id=f"batch_update_{student_id}_{year}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                action="UPDATE",
+                user_id=current_user["id"] if current_user else None,
+                old_values=old_values,
+                new_values={
+                    "new_item_name": new_item_name,
+                    "affected_items_count": updated_count,
+                    "months": [item.month for item in items]
+                },
+                changed_fields=["item_name"],
+                note=f"月別管理費項目名変更 - {student.name}: {item_name} → {new_item_name} ({year}年, {updated_count}ヶ月分)"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": f"'{item_name}' 항목명이 '{new_item_name}'으로 성공적으로 변경되었습니다",
+            "student_id": student_id,
+            "student_name": student.name,
+            "year": year,
+            "old_item_name": item_name,
+            "new_item_name": new_item_name,
+            "updated_count": updated_count,
+            "updated_months": [item.month for item in items]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"항목명 변경 중 오류가 발생했습니다: {str(e)}"
+        )
 
 @router.get("/{student_id}/room-charges")
 def get_student_room_charges(
