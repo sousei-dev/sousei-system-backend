@@ -242,6 +242,7 @@ class BuildingCreate(BaseModel):
     total_rooms: Optional[int] = Field(None, example=50)
     note: Optional[str] = Field(None, example="メモ")
     building_type: Optional[str] = Field(None, example="mansion")
+    resident_type: Optional[str] = Field(None, example="student")
 
 class BuildingUpdate(BaseModel):
     name: Optional[str] = None

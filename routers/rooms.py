@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List
 from database import SessionLocal
 from models import Room, Building, Student, RoomUtility, Resident
-from schemas import RoomResponse, RoomUpdate
+from schemas import RoomResponse, RoomUpdate, RoomCreate
 from database_log import create_database_log
 from utils.dependencies import get_current_user
 from datetime import datetime, timedelta
@@ -320,6 +320,192 @@ def get_room_residence_history(
         "current_page": page
     }
 
+@router.post("/", response_model=RoomResponse)
+def create_room(
+    room: RoomCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    # 빌딩 존재 여부 확인
+    building = db.query(Building).filter(Building.id == room.building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
+
+    # 같은 빌딩 내에서 방 번호 중복 확인
+    existing_room = db.query(Room).filter(
+        Room.building_id == room.building_id,
+        Room.room_number == room.room_number
+    ).first()
+    
+    if existing_room:
+        raise HTTPException(status_code=400, detail="해당 빌딩에 같은 방 번호가 이미 존재합니다")
+
+    # 정원 유효성 검사
+    if room.capacity is not None and room.capacity <= 0:
+        raise HTTPException(status_code=400, detail="정원은 1명 이상이어야 합니다")
+
+    new_room = Room(
+        building_id=room.building_id,
+        room_number=room.room_number,
+        rent=room.rent,
+        floor=room.floor,
+        capacity=room.capacity,
+        is_available=room.is_available,
+        note=room.note
+    )
+    db.add(new_room)
+    
+    try:
+        db.commit()
+        db.refresh(new_room)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="rooms",
+            record_id=str(new_room.id),
+            action="CREATE",
+            user_id=current_user["id"] if current_user else None,
+            new_values={
+                "building_id": str(new_room.building_id),
+                "room_number": new_room.room_number,
+                "rent": new_room.rent,
+                "floor": new_room.floor,
+                "capacity": new_room.capacity,
+                "is_available": new_room.is_available,
+                "note": new_room.note
+            },
+            note="部屋新規登録"
+        )
+        
+        return new_room
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"방 생성 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@router.put("/{room_id}", response_model=RoomResponse)
+def update_room(
+    room_id: str,
+    room_update: RoomUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    # 방 존재 여부 확인
+    room = db.query(Room).filter(Room.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
+
+    # 방 번호가 변경되는 경우 중복 확인
+    if room_update.room_number and room_update.room_number != room.room_number:
+        existing_room = db.query(Room).filter(
+            Room.building_id == room.building_id,
+            Room.room_number == room_update.room_number,
+            Room.id != room_id
+        ).first()
+        
+        if existing_room:
+            raise HTTPException(status_code=400, detail="해당 빌딩에 같은 방 번호가 이미 존재합니다")
+
+    # 정원 유효성 검사
+    if room_update.capacity is not None and room_update.capacity <= 0:
+        raise HTTPException(status_code=400, detail="정원은 1명 이상이어야 합니다")
+
+    # 기존 값 저장 (로그용)
+    old_values = {
+        "building_id": str(room.building_id),
+        "room_number": room.room_number,
+        "rent": room.rent,
+        "floor": room.floor,
+        "capacity": room.capacity,
+        "is_available": room.is_available,
+        "note": room.note
+    }
+    
+    # 방 정보 업데이트
+    update_data = room_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(room, field, value)
+
+    try:
+        db.commit()
+        db.refresh(room)
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="rooms",
+            record_id=str(room.id),
+            action="UPDATE",
+            user_id=current_user["id"] if current_user else None,
+            old_values=old_values,
+            new_values={
+                "building_id": str(room.building_id),
+                "room_number": room.room_number,
+                "rent": room.rent,
+                "floor": room.floor,
+                "capacity": room.capacity,
+                "is_available": room.is_available,
+                "note": room.note
+            },
+            changed_fields=list(update_data.keys()),
+            note="部屋情報更新"
+        )
+        
+        return room
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"방 정보 수정 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@router.delete("/{room_id}")
+def delete_room(
+    room_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    # 방 존재 여부 확인
+    room = db.query(Room).filter(Room.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
+
+    # 삭제 전 값 저장 (로그용)
+    old_values = {
+        "building_id": str(room.building_id),
+        "room_number": room.room_number,
+        "rent": room.rent,
+        "floor": room.floor,
+        "capacity": room.capacity,
+        "is_available": room.is_available,
+        "note": room.note
+    }
+    
+    try:
+        db.delete(room)
+        db.commit()
+        
+        # 로그 생성
+        create_database_log(
+            db=db,
+            table_name="rooms",
+            record_id=str(room.id),
+            action="DELETE",
+            user_id=current_user["id"] if current_user else None,
+            old_values=old_values,
+            note="部屋削除"
+        )
+        
+        return {"message": "部屋が正常に削除されました"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"방 삭제 중 오류가 발생했습니다: {str(e)}"
+        )
 
 @router.post("/{room_id}/check-in")
 def check_in_student(
