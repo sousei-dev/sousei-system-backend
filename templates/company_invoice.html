@@ -27,15 +27,30 @@
     /* 1페이지는 세로 방향 */
     @page :first {
       size: A4 portrait;
+      margin: 20mm;
     }
     
     /* 2페이지는 가로 방향 */
     @page {
       size: A4 landscape;
+      margin: 15mm;
     }
     
     .page-break {
       page-break-before: always;
+      page-break-after: always;
+    }
+    
+    /* 1페이지 컨테이너 */
+    .first-page {
+      page-break-after: always;
+      min-height: 100vh;
+    }
+    
+    /* 2페이지 컨테이너 */
+    .second-page {
+      page-break-before: always;
+      min-height: 100vh;
     }
     .header {
       display: flex;
@@ -73,25 +88,29 @@
       border-collapse: collapse;
       margin-bottom: 20px;
       font-size: 8pt;
+      border: 1px solid #000;  /* 겉 테두리선 추가 */
     }
     .invoice-table th,
     .invoice-table td {
-      border: 1px solid #000;
-      padding: 8px;
+      border-left: 1px solid #000;  /* 세로선 */
+      border-right: 1px solid #000;  /* 세로선 */
+      border-top: none;  /* 가로선 제거 */
+      border-bottom: none;  /* 가로선 제거 */
+      padding: 4px 8px;
       text-align: center;
       vertical-align: middle;
-      height: 30px;
+      height: auto;
     }
     .invoice-table th {
       background-color: #f0f0f0;
       font-weight: bold;
       font-size: 8pt;
       height: auto;
-      padding: 6px 8px;
+      padding: 4px 8px;
     }
     .item-description {
       text-align: left;
-      width: 30%;
+      width: 40%;
     }
     .unit-price {
       width: 12%;
@@ -115,7 +134,7 @@
     }
     .summary-row td {
       height: auto;
-      padding: 6px 8px;
+      padding: 4px 8px;  /* 패딩 줄임 */
     }
     .summary-row .none-border {
       background-color: #fff;
@@ -129,24 +148,31 @@
       text-align: left !important;
     }
     .expense-adjustment-row {
-      height: 90px;
+      height: 60px;  /* 박스 높이 설정 */
     }
     .expense-adjustment-row td {
       vertical-align: top;
+      border-left: none;  /* 세로선 제거 */
+      border-right: none;  /* 세로선 제거 */
+    }
+    .expense-adjustment-row .item-description-left {
+      border-left: 1px solid #000;  /* 왼쪽 세로선만 유지 */
+    }
+    .expense-adjustment-row .amount-excluding-tax {
+      border-right: 1px solid #000;  /* 오른쪽 세로선만 유지 */
     }
     .final-total-row {
-      border: 3px solid #000;
+      border: none;  /* 선 제거 */
       font-weight: bold;
     }
     .final-total-row td {
-      border-bottom: none;
-      border-left: none;
+      border: none;  /* 선 제거 */
     }
     .final-total-row td:first-child {
-      border-left: 1px solid #000;
+      border: none;  /* 선 제거 */
     }
     .notes-section {
-      margin-top: 30px;
+      margin-top: 50px;
       padding: 15px;
       border: 1px solid #000;
       line-height: 1.2;
@@ -228,100 +254,124 @@
 </head>
 <body>
   <!-- 1페이지: 청구서 -->
-  <div class="header">
-    <div class="recipient-info">
-      〒594-1157<br>
-      大阪府和泉市あゆみ野1-7-1<br><br>
-      <strong><span class="recipient-name">医療法人聖和錦秀会 阪和いずみ病院 御中</span></strong>
+  <div class="first-page">
+    <div class="header">
+      <div class="recipient-info">
+        {{ data.recipient_address }}<br><br>
+        <strong><span class="recipient-name">{{ data.recipient_name }}</span></strong>
+      </div>
+      <div class="sender-info">
+        {{ data.sender_name }}<br>
+        {{ data.sender_address }}<br>
+        TEL {{ data.sender_tel }} FAX {{ data.sender_fax }}<br>
+        登録番号 {{ data.registration_number }}
+      </div>
     </div>
-    <div class="sender-info">
-      株式会社 ミシマ<br>
-      〒546-0003 大阪市東住吉区今川4-5-9-201<br>
-      TEL 06-6760-7400 FAX 06-6760-7401<br>
-      登録番号 T4120001018934
+
+    <div class="title">請 求 書</div>
+
+    <div class="invoice-date">
+      {{ data.invoice_date }}
     </div>
-  </div>
 
-  <div class="title">請 求 書</div>
-
-  <div class="invoice-date">
-    2025年8月10日
-  </div>
-
-  <div class="intro-message">
-    いつもお世話になっております。<br>
-    以下ご請求させていただきますのでよろしくお願い申し上げます。
-  </div>
-
-  <table class="invoice-table">
-    <thead>
-      <tr>
-        <th class="item-description">請求の項目</th>
-        <th class="unit-price">単価</th>
-        <th class="quantity">数量</th>
-        <th class="tax-rate">税率</th>
-        <th class="tax-amount">消費税額</th>
-        <th class="amount-excluding-tax">税抜金額</th>
-      </tr>
-    </thead>
-    <tbody>
-      <!-- 빈 행들 - 실제 데이터가 들어갈 공간 -->
-      <tr style="height: 200px;">
-        <td class="item-description" style="vertical-align: top;"></td>
-        <td class="unit-price"></td>
-        <td class="quantity"></td>
-        <td class="tax-rate"></td>
-        <td class="tax-amount"></td>
-        <td class="amount-excluding-tax"></td>
-      </tr>
-      
-      <!-- 소계 행 - 한 줄로 합침 -->
-      <tr class="summary-row">
-        <td class="item-description" colspan="5">小計</td>
-        <td class="amount-excluding-tax"></td>
-      </tr>
-      
-      <!-- 소비세 행 - 한 줄로 합침 -->
-      <tr class="summary-row">
-        <td class="item-description" colspan="5">消費税額 10%</td>
-        <td class="amount-excluding-tax"></td>
-      </tr>
-      
-      <!-- 실비정산 행 - 한 줄로 합침 -->
-      <tr class="expense-adjustment-row">
-        <td class="item-description-left" colspan="5">【実費精算・その他】</td>
-        <td class="amount-excluding-tax"></td>
-      </tr>
-      
-      <!-- 최종 청구금액 행 - 실비정산 다음 줄에 추가 -->
-      <tr class="summary-row">
-        <td class="item-description none-border" colspan="4" style="border-bottom: 0px solid #000;"></td>
-        <td class="item-description final-total-row">ご請求金額</td>
-        <td class="amount-excluding-tax"></td>
-      </tr>
-    </tbody>
-  </table>
-
-  <div class="notes-section">
-    <div class="notes-title">備考</div>
-    
-    <p>いつもお世話になっております。</p>
-    <p>お手数ではございますが、お支払いは下記銀行口座へ振込くださいますようお願い申し上げます。</p>
-    
-    <div class="bank-info">
-      <p>【振込先】</p>
-      <p>関西みらい銀行 八尾本町支店 （普通） 0043448</p>
-      <p>株式会社ミシマ</p>
-      <p>※恐れ入りますが、振込手数料は貴社にてご負担ください。</p>
+    <div class="intro-message">
+      いつもお世話になっております。<br>
+      以下ご請求させていただきますのでよろしくお願い申し上げます。
     </div>
-    
-    <div class="payment-deadline">
-      お振込み期限 ： 8月31日
+
+    <table class="invoice-table">
+      <thead>
+        <tr>
+          <th class="item-description">請求の項目</th>
+          <th class="unit-price">単価</th>
+          <th class="quantity">数量</th>
+          <th class="tax-rate">税率</th>
+          <th class="tax-amount">消費税額</th>
+          <th class="amount-excluding-tax">税抜金額</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- 카테고리별 표시 -->
+        {% if data.categories %}
+          {% for category in data.categories %}
+            <tr>
+              <td class="item-description">【{{ category.name }}】</td>
+              <td class="unit-price"></td>
+              <td class="quantity"></td>
+              <td class="tax-rate"></td>
+              <td class="tax-amount"></td>
+              <td class="amount-excluding-tax"></td>
+            </tr>
+            <tr>
+              <td class="item-description">家賃({{ category.billing_month }}月分)</td>
+              <td class="unit-price">¥{{ "{:,}".format(category.total_rent + category.total_management) }}</td>
+              <td class="quantity">1</td>
+              <td class="tax-rate">非</td>
+              <td class="tax-amount">-</td>
+              <td class="amount-excluding-tax">¥{{ "{:,}".format(category.total_rent + category.total_management) }}</td>
+            </tr>
+            <tr>
+              <td class="item-description">Wi-Fi代({{ category.billing_month }}月分)</td>
+              <td class="unit-price">¥{{ "{:,}".format(category.total_wifi) }}</td>
+              <td class="quantity">1</td>
+              <td class="tax-rate">10%</td>
+              <td class="tax-amount">¥{{ "{:,}".format(category.total_wifi_tax) }}</td>
+              <td class="amount-excluding-tax">¥{{ "{:,}".format(category.total_wifi) }}</td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+        
+        <!-- 소계 행 -->
+        <tr class="summary-row">
+          <td class="item-description" colspan="5">小計</td>
+          <td class="amount-excluding-tax">¥{{ "{:,}".format(data.subtotal) }}</td>
+        </tr>
+        
+        <!-- 소비세 행 -->
+        <tr class="summary-row">
+          <td class="item-description" colspan="5">消費税額 10%</td>
+          <td class="amount-excluding-tax">¥{{ "{:,}".format(data.tax_amount) }}</td>
+        </tr>
+        
+        <!-- 실비정산 행 -->
+        <tr class="expense-adjustment-row">
+          <td class="item-description-left">【実費精算・その他】</td>
+          <td class="unit-price"></td>
+          <td class="quantity"></td>
+          <td class="tax-rate"></td>
+          <td class="tax-amount"></td>
+          <td class="amount-excluding-tax"></td>
+        </tr>
+        
+        <!-- 최종 청구금액 행 -->
+        <tr class="summary-row">
+          <td class="item-description" colspan="5">ご請求金額</td>
+          <td class="amount-excluding-tax">¥{{ "{:,}".format(data.total_amount) }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="notes-section">
+      <div class="notes-title">備考</div>
+      
+      <p>いつもお世話になっております。</p>
+      <p>お手数ではございますが、お支払いは下記銀行口座へ振込くださいますようお願い申し上げます。</p>
+      
+      <div class="bank-info">
+        <p>【振込先】</p>
+        <p>{{ data.bank_name }} {{ data.branch_name }}支店 （{{ data.account_type }}） {{ data.account_number }}</p>
+        <p>{{ data.account_holder }}</p>
+        <p>※恐れ入りますが、振込手数料は貴社にてご負担ください。</p>
+      </div>
+      
+      <div class="payment-deadline">
+        お振込み期限 ： {{ data.payment_deadline }}
+      </div>
     </div>
   </div>
 
   <!-- 2페이지: 상세 리스트 (가로 형태) -->
-  <div class="landscape-page">
+  <div class="second-page">
     <div class="title">居住者情報 詳細リスト</div>
     
     <table class="list-table">

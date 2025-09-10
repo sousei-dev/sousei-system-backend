@@ -1362,6 +1362,11 @@ def download_monthly_invoice_pdf_students_company(
             next_year = year
             next_month = month + 1
         
+        # 회사 정보 조회
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
+        
         # PDF용 데이터 준비 - 2페이지 리스트 포함
         pdf_data = {
             "sender_name": "株式会社 ミシマ",
@@ -1369,8 +1374,9 @@ def download_monthly_invoice_pdf_students_company(
             "sender_tel": "06-6760-7400",
             "sender_fax": "06-6760-7401",
             "registration_number": "T4120001018934",
-            "recipient_name": "医療法人聖和錦秀会 阪和いずみ病院 御中",
-            "recipient_address": "〒594-1157 大阪府和泉市あゆみ野1-7-1",
+            "recipient_name": company.name + " 御中",
+            "recipient_address": company.address,
+            "sender_postal_code": "546-0003",
             "invoice_date": f"{year}年{month}月10日",
             "billing_period": preview_data.get("billing_period", f"{year}年{month}月"),
             "year": year,
@@ -1448,11 +1454,13 @@ def download_monthly_invoice_pdf_students_company(
                 "rent_amount": student.get("rent_amount", 0),
                 "management_fee": student.get("management_fee", 0),
                 "wifi_amount": student.get("wifi_amount", 0),
-                "total_amount": student.get("total_amount", 0),
+                "total_amount": student.get("rent_management_wifi_total", 0),
                 "category": "技能" if student.get("student_type") == "GENERAL" else "特定",
                 "generation": student.get("grade_name", "") if student.get("student_type") == "GENERAL" else "",
                 "billingMonth": billing_month,
-                "billingYear": billing_year
+                "billingYear": billing_year,
+                # Wi-Fi 세금 계산 (10%)
+                "wifi_tax_amount": int(student.get("wifi_amount", 0) * 0.1)
             }
             pdf_data["students"].append(student_data)
             
@@ -1468,30 +1476,65 @@ def download_monthly_invoice_pdf_students_company(
         
         # 1페이지 청구서용 카테고리 데이터
         if general_students:
-            general_subtotal = sum(s.get("total_amount", 0) for s in general_students)
-            pdf_data["categories"].append({
-                "name": "機能実習生",
-                "students": general_students,
-                "subtotal": general_subtotal
-            })
-            pdf_data["subtotal"] += general_subtotal
+            # generation별로 그룹화
+            generation_groups = {}
+            for student in general_students:
+                generation = student.get("grade_name", "")
+                if generation not in generation_groups:
+                    generation_groups[generation] = []
+                generation_groups[generation].append(student)
+            
+            # 각 generation별로 카테고리 생성
+            for generation, students in generation_groups.items():
+                group_rent = sum(s.get("rent_amount", 0) for s in students)
+                group_management = sum(s.get("management_fee", 0) for s in students)
+                group_wifi = sum(s.get("wifi_amount", 0) for s in students)
+                group_wifi_tax = int(group_wifi * 0.1)
+                group_subtotal = group_rent + group_management + group_wifi  # 소계 계산
+                
+                pdf_data["categories"].append({
+                    "name": f"技能実習生{generation}",
+                    "students": students,
+                    "subtotal": group_subtotal,
+                    "total_rent": group_rent,
+                    "total_management": group_management,
+                    "total_wifi": group_wifi,
+                    "total_wifi_tax": group_wifi_tax,
+                    "billing_month": students[0].get("billingMonth", month) if students else month
+                })
+                pdf_data["subtotal"] += group_subtotal  # 전체 소계에 추가
         
         if specific_students:
-            specific_subtotal = sum(s.get("total_amount", 0) for s in specific_students)
+            specific_rent = sum(s.get("rent_amount", 0) for s in specific_students)
+            specific_management = sum(s.get("management_fee", 0) for s in specific_students)
+            specific_wifi = sum(s.get("wifi_amount", 0) for s in specific_students)
+            specific_wifi_tax = int(specific_wifi * 0.1)
+            specific_subtotal = specific_rent + specific_management + specific_wifi  # 소계 계산
+            
             pdf_data["categories"].append({
-                "name": "特定機能実習生",
+                "name": "特定技能実習生",
                 "students": specific_students,
-                "subtotal": specific_subtotal
+                "subtotal": specific_subtotal,
+                "total_rent": specific_rent,
+                "total_management": specific_management,
+                "total_wifi": specific_wifi,
+                "total_wifi_tax": specific_wifi_tax,
+                "billing_month": specific_students[0].get("billingMonth", month) if specific_students else month
             })
-            pdf_data["subtotal"] += specific_subtotal
+            pdf_data["subtotal"] += specific_subtotal  # 전체 소계에 추가
         
-        # 세금 계산
-        pdf_data["tax_amount"] = int(pdf_data["subtotal"] * 0.1)
+        # 세금 계산 (Wi-Fi 비용에만 10% 세금)
+        total_wifi_tax = sum(category.get("total_wifi_tax", 0) for category in pdf_data["categories"])
+        pdf_data["tax_amount"] = total_wifi_tax
         pdf_data["total_amount"] = pdf_data["subtotal"] + pdf_data["tax_amount"]
         
         print(f"[DEBUG] 최종 PDF 데이터: categories 길이 = {len(pdf_data['categories'])}")
         print(f"[DEBUG] 총 학생 수: {len(general_students) + len(specific_students)}")
         print(f"[DEBUG] 소계: {pdf_data['subtotal']}, 세금: {pdf_data['tax_amount']}, 총액: {pdf_data['total_amount']}")
+        print(f"[DEBUG] 2페이지 총액 (rent_management_wifi_total): {pdf_data['total_amount']}")
+        print(f"[DEBUG] 학생별 total_amount:")
+        for i, student in enumerate(pdf_data["students"]):
+            print(f"  학생 {i+1}: {student.get('total_amount', 0)}")
         
         # HTML 템플릿 렌더링
         html_content = templates.get_template("company_invoice.html").render(
