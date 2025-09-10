@@ -6,16 +6,24 @@
   <style>
     @font-face {
       font-family: "Noto Sans JP";
-      src: url("/static/fonts/NotoSansJP-Regular.ttf") format("opentype");
+      src: url("data:font/ttf;base64,") format("opentype");
       font-weight: normal;
       font-style: normal;
     }
+    
     body {
-      font-family: "Noto Sans JP", "Hiragino Sans", "ヒラギノ角ゴシック", "Yu Gothic", "メイリオ", "Meiryo", sans-serif;
+      font-family: "Noto Sans JP", "Hiragino Sans", "ヒラギノ角ゴシック", "Yu Gothic Medium", "Yu Gothic", "メイリオ", "Meiryo", "MS PGothic", "MS Pゴシック", "Takao Gothic", "IPAexGothic", "IPAPGothic", "VL PGothic", "Noto Sans CJK JP", sans-serif;
       font-size: 8pt;
       margin: 0;
       padding: 20px;
       line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    /* 일본어 텍스트 강제 렌더링 */
+    * {
+      font-family: "Noto Sans JP", "Hiragino Sans", "ヒラギノ角ゴシック", "Yu Gothic Medium", "Yu Gothic", "メイリオ", "Meiryo", "MS PGothic", "MS Pゴシック", "Takao Gothic", "IPAexGothic", "IPAPGothic", "VL PGothic", "Noto Sans CJK JP", sans-serif !important;
     }
     
     /* 1페이지는 세로 방향 */
