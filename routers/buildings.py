@@ -10,8 +10,11 @@ from database_log import create_database_log
 from utils.dependencies import get_current_user
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
-from weasyprint import HTML
+from weasyprint import HTML, CSS
+from weasyprint.text.fonts import FontConfiguration
 from urllib.parse import quote
+import base64
+import os
 
 router = APIRouter(prefix="/buildings", tags=["건물 관리"])
 
@@ -1277,7 +1280,61 @@ def get_monthly_invoice_preview_by_students_building(
 
 def html_to_pdf_bytes(html_content: str) -> bytes:
     """HTML 내용을 PDF로 변환 (weasyprint 사용)"""
-    pdf = HTML(string=html_content).write_pdf()
+    from weasyprint import HTML, CSS
+    from weasyprint.text.fonts import FontConfiguration
+    import base64
+    import os
+    
+    # Noto Sans JP 폰트 파일을 base64로 인코딩
+    font_path = "static/fonts/NotoSansJP-Regular.ttf"
+    font_base64 = ""
+    
+    try:
+        if os.path.exists(font_path):
+            with open(font_path, "rb") as font_file:
+                font_data = font_file.read()
+                font_base64 = base64.b64encode(font_data).decode('utf-8')
+                print(f"[DEBUG] Noto Sans JP 폰트 로드 성공: {len(font_data)} bytes")
+        else:
+            print(f"[WARNING] 폰트 파일을 찾을 수 없음: {font_path}")
+    except Exception as e:
+        print(f"[WARNING] 폰트 로드 실패: {str(e)}")
+    
+    # CSS with embedded font
+    css_content = f"""
+    @font-face {{
+        font-family: "Noto Sans JP";
+        src: url("data:font/ttf;base64,{font_base64}") format("truetype");
+        font-weight: normal;
+        font-style: normal;
+    }}
+    
+    @page {{
+        size: A4;
+        margin: 20mm;
+    }}
+    
+    body {{
+        font-family: "Noto Sans JP", "Hiragino Sans", "ヒラギノ角ゴシック", "Yu Gothic Medium", "Yu Gothic", "メイリオ", "Meiryo", "MS PGothic", "MS Pゴシック", "Takao Gothic", "IPAexGothic", "IPAPGothic", "VL PGothic", "Noto Sans CJK JP", sans-serif;
+        font-size: 8pt;
+        line-height: 1.4;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }}
+    
+    * {{
+        font-family: "Noto Sans JP", "Hiragino Sans", "ヒラギノ角ゴシック", "Yu Gothic Medium", "Yu Gothic", "メイリオ", "Meiryo", "MS PGothic", "MS Pゴシック", "Takao Gothic", "IPAexGothic", "IPAPGothic", "VL PGothic", "Noto Sans CJK JP", sans-serif !important;
+    }}
+    """
+    
+    # FontConfiguration 설정
+    font_config = FontConfiguration()
+    
+    # HTML과 CSS를 함께 렌더링
+    html_doc = HTML(string=html_content)
+    css_doc = CSS(string=css_content, font_config=font_config)
+    
+    pdf = html_doc.write_pdf(stylesheets=[css_doc], font_config=font_config)
     return pdf
 
 @router.get("/download-monthly-invoice-pdf/students/company/{year}/{month}")
