@@ -15,7 +15,7 @@ class UserLogin(BaseModel):
 
 class StudentCreate(BaseModel):
     name: str = Field(..., example="홍길동")
-    company_id: Optional[Union[UUID, str]] = None
+    department_id: Optional[Union[UUID, str]] = None
     consultant: Optional[int] = None
     grade_id: Optional[Union[UUID, str]] = None
     cooperation_submitted_date: Optional[Union[date, str]] = None
@@ -55,7 +55,7 @@ class StudentCreate(BaseModel):
     check_in_date: Optional[str] = Field(None, description="입주일 (YYYY-MM-DD)")
     room_note: Optional[str] = Field(None, description="입주 관련 비고사항")
 
-    @field_validator('company_id', 'grade_id', 'current_room_id', mode='before')
+    @field_validator('department_id', 'grade_id', 'current_room_id', mode='before')
     @classmethod
     def validate_uuid_fields(cls, v):
         if v == "" or v is None:
@@ -85,7 +85,7 @@ class StudentCreate(BaseModel):
 class StudentUpdate(BaseModel):
     name: Optional[str] = None
     # email: Optional[str] = None
-    company_id: Optional[str] = None
+    department_id: Optional[str] = None
     consultant: Optional[int] = None
     phone: Optional[str] = None
     grade_id: Optional[str] = None

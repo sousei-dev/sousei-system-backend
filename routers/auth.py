@@ -45,7 +45,7 @@ async def login(user: UserLogin):
         
         # 사용자 권한 정보 조회
         try:
-            profile_response = supabase.table("profiles").select("name, role").eq("id", user_data.id).execute()
+            profile_response = supabase.table("profiles").select("name, role, department, position, avatar").eq("id", user_data.id).execute()
             profile_data = profile_response.data[0] if profile_response.data else {}
             
             return {
@@ -53,6 +53,9 @@ async def login(user: UserLogin):
                 "user_id": user_data.id,
                 "email": user_data.email,
                 "name": profile_data.get("name"),
+                "avatar": profile_data.get("avatar"),
+                "department": profile_data.get("department"),
+                "position": profile_data.get("position"),
                 "role": profile_data.get("role", "manager"),
                 "access_token": session.access_token,
                 "refresh_token": session.refresh_token,
@@ -65,6 +68,8 @@ async def login(user: UserLogin):
                 "user_id": user_data.id,
                 "email": user_data.email,
                 "name": None,
+                "department": None,
+                "position": None,
                 "role": "manager",
                 "access_token": session.access_token,
                 "refresh_token": session.refresh_token,
@@ -110,17 +115,66 @@ async def refresh_token(refresh_token: str):
         auth_response = supabase.auth.refresh_session(refresh_token)
         session = auth_response.session
         
-        return {
-            "message": "토큰이 성공적으로 갱신되었습니다.",
-            "access_token": session.access_token,
-            "refresh_token": session.refresh_token,
-            "token_type": "bearer"
-        }
+        # 새로운 사용자 정보 조회
+        try:
+            profile_response = supabase.table("profiles").select("name, role, department, position, avatar").eq("id", session.user.id).execute()
+            profile_data = profile_response.data[0] if profile_response.data else {}
+            
+            return {
+                "message": "토큰이 성공적으로 갱신되었습니다.",
+                "user_id": session.user.id,
+                "email": session.user.email,
+                "name": profile_data.get("name"),
+                "avatar": profile_data.get("avatar"),
+                "department": profile_data.get("department"),
+                "position": profile_data.get("position"),
+                "role": profile_data.get("role", "manager"),
+                "access_token": session.access_token,
+                "refresh_token": session.refresh_token,
+                "token_type": "bearer"
+            }
+        except Exception as profile_error:
+            # 프로필 조회 실패 시 기본 정보만 반환
+            return {
+                "message": "토큰이 성공적으로 갱신되었습니다.",
+                "user_id": session.user.id,
+                "email": session.user.email,
+                "name": None,
+                "department": None,
+                "position": None,
+                "role": "manager",
+                "access_token": session.access_token,
+                "refresh_token": session.refresh_token,
+                "token_type": "bearer"
+            }
+        
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"토큰 갱신에 실패했습니다: {str(e)}"
-        )
+        error_message = str(e)
+        print(f"[DEBUG] Refresh token error: {error_message}")  # 디버깅용 로그 추가
+        
+        # Supabase의 실제 에러 메시지들을 더 정확하게 체크
+        if any(keyword in error_message.lower() for keyword in [
+            "invalid refresh token", 
+            "already used", 
+            "expired", 
+            "invalid_grant",
+            "refresh_token_not_found",
+            "token_expired"
+        ]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="리프레시 토큰이 만료되었거나 이미 사용되었습니다. 다시 로그인해주세요."
+            )
+        elif "invalid_request" in error_message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="잘못된 요청입니다. 리프레시 토큰을 확인해주세요."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"토큰 갱신 중 오류가 발생했습니다: {error_message}"
+            )
 
 @router.post("/signup")
 async def signup(user: UserCreate):

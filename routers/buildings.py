@@ -15,6 +15,7 @@ from weasyprint.text.fonts import FontConfiguration
 from urllib.parse import quote
 import base64
 import os
+from utils.dependencies import get_current_user
 
 router = APIRouter(prefix="/buildings", tags=["건물 관리"])
 
@@ -34,7 +35,8 @@ def get_buildings(
     resident_type: Optional[str] = Query(None, description="거주자 타입으로 검색"),
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     # 기본 쿼리 생성
     query = db.query(Building)
@@ -107,7 +109,7 @@ def create_building(
         )
 
 @router.get("/options")
-def get_building_options(db: Session = Depends(get_db)):
+def get_building_options(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """건물 옵션 목록 (드롭다운용)"""
     try:
         buildings = db.query(Building).order_by(Building.name.asc()).all()
@@ -127,7 +129,8 @@ def get_building_options(db: Session = Depends(get_db)):
 @router.get("/{building_id}/empty-rooms")
 def get_building_empty_rooms(
     building_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """특정 빌딩의 빈 호실 목록을 조회"""
     try:
@@ -185,6 +188,7 @@ def get_building_empty_rooms(
 def get_building(
     building_id: str,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
@@ -198,7 +202,8 @@ def get_rooms_by_building(
     is_available: Optional[bool] = Query(None, description="사용 가능 여부로 필터링"),
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(100, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     # 빌딩 존재 여부 확인
     building = db.query(Building).filter(Building.id == building_id).first()
@@ -324,10 +329,12 @@ def get_monthly_invoice_preview_by_students_company(
     year: int,
     month: int,
     company_id: Optional[str] = Query(None, description="특정 회사로 필터링"),
-    db: Session = Depends(get_db)
+    department_id: Optional[str] = Query(None, description="특정 부서로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """해당 년도 월의 모든 학생별 청구서 미리보기 데이터 조회 (PDF 다운로드 전 프론트 표시용)"""
-    print(f"[DEBUG] get_monthly_invoice_preview 시작 - year: {year}, month: {month}, company_id: {company_id}")
+    print(f"[DEBUG] get_monthly_invoice_preview 시작 - year: {year}, month: {month}, company_id: {company_id}, department_id: {department_id}")
     
     # 월 유효성 검사
     if month < 1 or month > 12:
@@ -358,11 +365,20 @@ def get_monthly_invoice_preview_by_students_company(
         current_month_end_date = date(year, month + 1, 1) - timedelta(days=1)
     current_total_days_in_month = (current_month_end_date - current_month_start_date).days + 1
 
-    # 1. 회사별 학생 리스트 조회
-    print(f"[DEBUG] 회사별 학생 리스트 조회 시작")
-    if company_id:
+    # 1. 회사별/부서별 학생 리스트 조회
+    print(f"[DEBUG] 회사별/부서별 학생 리스트 조회 시작")
+    if company_id and department_id:
+        # 특정 회사와 부서의 학생들 조회
+        students_query = db.query(Student).filter(
+            Student.company_id == company_id,
+            Student.department_id == department_id
+        )
+    elif company_id:
         # 특정 회사 학생들 조회
         students_query = db.query(Student).filter(Student.company_id == company_id)
+    elif department_id:
+        # 특정 부서 학생들 조회
+        students_query = db.query(Student).filter(Student.department_id == department_id)
     else:
         # 모든 학생 조회
         students_query = db.query(Student)
@@ -805,7 +821,8 @@ def get_monthly_invoice_preview_by_students_building(
     year: int,
     month: int,
     building_id: Optional[str] = Query(None, description="특정 건물로 필터링"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """해당 년도 월의 건물별 학생별 청구서 미리보기 데이터 조회 (PDF 다운로드 전 프론트 표시용)"""
     print(f"[DEBUG] get_monthly_invoice_preview_by_building 시작 - year: {year}, month: {month}, building_id: {building_id}")
@@ -1342,7 +1359,9 @@ def download_monthly_invoice_pdf_students_company(
     year: int,
     month: int,
     company_id: Optional[str] = Query(None, description="특정 회사로 필터링"),
-    db: Session = Depends(get_db)
+    department_id: Optional[str] = Query(None, description="특정 부서로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """월간 학생별 청구서 PDF 다운로드 (회사 기준)"""
     try:
@@ -1351,6 +1370,7 @@ def download_monthly_invoice_pdf_students_company(
             year=year,
             month=month,
             company_id=company_id,
+            department_id=department_id,
             db=db
         )
         
@@ -1569,7 +1589,8 @@ def download_monthly_invoice_pdf_students_building(
     year: int,
     month: int,
     building_id: Optional[str] = Query(None, description="특정 건물로 필터링"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """월간 학생별 청구서 PDF 다운로드 (건물 기준)"""
     try:

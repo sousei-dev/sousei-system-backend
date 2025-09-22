@@ -22,6 +22,9 @@ class Profiles(Base):
 
     id = Column(String, primary_key=True, index=True)
     name = Column(String)
+    avatar = Column(String, default="/src/assets/images/avatars/avatar-1.png")
+    department = Column(String)
+    position = Column(String)
     role = Column(String)
 
 class Student(Base):
@@ -68,6 +71,7 @@ class Student(Base):
     facebook_name = Column(String)
     visa_year = Column(String)
     note = Column(Text)
+    department_id = Column(UUID(as_uuid=True), ForeignKey("departments.id"))
 
     # 관계 설정
     company = relationship("Company", back_populates="students")
@@ -75,6 +79,7 @@ class Student(Base):
     invoices = relationship("Invoice", back_populates="student", cascade="all, delete-orphan")
     current_room = relationship("Room", back_populates="current_residents")
     residence_card_histories = relationship("ResidenceCardHistory", back_populates="student", cascade="all, delete-orphan")
+    department = relationship("Department", back_populates="students")
 
 class Company(Base):
     __tablename__ = "companies"
@@ -82,10 +87,26 @@ class Company(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String)
     address = Column(String)
+    billing_scope = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Student와의 관계 설정
     students = relationship("Student", back_populates="company")
+    # Department와의 관계 설정
+    departments = relationship("Department", back_populates="company")
+
+class Department(Base):
+    __tablename__ = "departments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Company와의 관계 설정
+    company = relationship("Company", back_populates="departments")
+    # Student와의 관계 설정
+    students = relationship("Student", back_populates="department")
 
 class Grade(Base):
     __tablename__ = "grades"

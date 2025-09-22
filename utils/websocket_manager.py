@@ -289,100 +289,28 @@ class ConnectionManager:
         for user_id in disconnected_users:
             self.disconnect_from_room(user_id, conversation_id)
     
-    async def send_chat_list_update(self, conversation_id: str, update_type: str, update_data: dict, exclude_user: Optional[str] = None):
-        """채팅 변경 시 모든 참여자의 채팅 리스트 업데이트"""
-        if conversation_id not in self.conversation_members:
-            logger.warning(f"대화방 {conversation_id}에 참여자가 없음")
-            return
-        
-        # 채팅 리스트 업데이트 메시지 구성
-        update_message = {
+    async def send_chat_list_update(
+        self, 
+        conversation_id: str, 
+        event_type: str, 
+        data: dict, 
+        target_user: str = None
+    ):
+        """채팅 리스트 업데이트 전송"""
+        message = {
             "type": "chat_list_update",
+            "event": event_type,
             "conversation_id": conversation_id,
-            "update_type": update_type,  # "new_message", "message_updated", "message_deleted", "conversation_updated"
-            "update_data": update_data,
+            "data": data,
             "timestamp": datetime.utcnow().isoformat()
         }
         
-        logger.info(f"채팅 리스트 업데이트 전송 시작: {conversation_id}, 타입: {update_type}, 참여자: {len(self.conversation_members[conversation_id])}명")
-        logger.info(f"참여자 목록: {list(self.conversation_members[conversation_id])}")
-        logger.info(f"현재 연결된 채팅방들: {list(self.room_connections.keys())}")
-        for room_id, users in self.room_connections.items():
-            logger.info(f"  - 채팅방 {room_id}: {list(users.keys())}")
+        if target_user:
+            # 특정 사용자에게만 전송 (발신자 확인용)
+            await self.send_personal_message(message, target_user)
         
-        # 모든 참여자에게 메시지 전송 (연결 방식에 관계없이)
-        sent_count = 0
-        failed_users = []
-        
-        for user_id in self.conversation_members[conversation_id]:
-            # 특정 사용자 제외
-            if exclude_user and user_id == exclude_user:
-                continue
-            
-            message_sent = False
-            
-            # 1. 채팅방별 연결 시도 (우선순위 1) - 해당 방에 있는 경우
-            if (conversation_id in self.room_connections and 
-                user_id in self.room_connections[conversation_id]):
-                try:
-                    await self.room_connections[conversation_id][user_id].send_text(json.dumps(update_message))
-                    message_sent = True
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"채팅방별 연결로 사용자 {user_id}에게 전송 실패: {e}")
-                    failed_users.append(user_id)
-            
-            # 2. 다른 채팅방에 연결된 경우 (우선순위 2) - 다른 방에 있는 경우
-            if not message_sent:
-                # 사용자가 다른 채팅방에 연결되어 있는지 확인
-                user_connected_rooms = self.get_user_room_status(user_id)
-                logger.info(f"사용자 {user_id}의 연결된 채팅방들: {user_connected_rooms}")
-                if user_connected_rooms:
-                    for room_id in user_connected_rooms:
-                        if room_id != conversation_id:  # 다른 방에 연결된 경우
-                            logger.info(f"다른 채팅방 {room_id}를 통해 사용자 {user_id}에게 메시지 전송 시도")
-                            try:
-                                await self.room_connections[room_id][user_id].send_text(json.dumps(update_message))
-                                logger.info(f"다른 채팅방 {room_id}를 통해 사용자 {user_id}에게 메시지 전송 성공")
-                                message_sent = True
-                                sent_count += 1
-                                break
-                            except Exception as e:
-                                logger.error(f"다른 채팅방({room_id}) 연결로 사용자 {user_id}에게 전송 실패: {e}")
-                                continue
-            
-            # 3. 전역 연결 시도 (우선순위 3) - 방에 들어가지 않아도 항상 받을 수 있도록
-            if not message_sent and user_id in self.active_connections:
-                try:
-                    await self.active_connections[user_id].send_text(json.dumps(update_message))
-                    message_sent = True
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"전역 연결로 사용자 {user_id}에게 전송 실패: {e}")
-                    failed_users.append(user_id)
-            
-            if not message_sent:
-                logger.warning(f"사용자 {user_id}에게 메시지 전송 실패 - 모든 연결 방식 시도됨")
-                failed_users.append(user_id)
-        
-        # 연결이 끊어진 사용자들 정리
-        for user_id in failed_users:
-            # 모든 연결에서 사용자 제거
-            if user_id in self.active_connections:
-                self.disconnect(user_id)
-            else:
-                # 개별 채팅방에서 제거
-                for room_id in list(self.room_connections.keys()):
-                    if user_id in self.room_connections[room_id]:
-                        self.disconnect_from_room(user_id, room_id)
-        
-        logger.info(f"채팅 리스트 업데이트 전송 완료: {conversation_id}, 성공: {sent_count}명, 실패: {len(failed_users)}명")
-        
-        return {
-            "success_count": sent_count,
-            "failed_count": len(failed_users),
-            "failed_users": failed_users
-        }
+        # 모든 참여자에게도 전송 (다른 화면에 있는 사용자들을 위해)
+        await self.send_to_conversation(message, conversation_id, exclude_user=target_user)
     
     async def send_conversation_update(self, conversation_id: str, update_type: str, update_data: dict, exclude_user: Optional[str] = None):
         """대화방 정보 변경 시 모든 참여자에게 업데이트 알림"""

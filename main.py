@@ -90,7 +90,7 @@ app.include_router(auth.router)
 app.include_router(students.router)
 app.include_router(billing.router)
 app.include_router(elderly.router)
-# app.include_router(companies.router)  # 간단한 버전으로 대체
+app.include_router(companies.router)  # 간단한 버전으로 대체
 # app.include_router(grades.router)  # 간단한 버전으로 대체
 app.include_router(buildings.router)
 app.include_router(rooms.router)  # 모든 /rooms API가 여기에 통합됨
@@ -127,45 +127,39 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": "2024-01-01T00:00:00Z"}
 
-# 회사 관련 엔드포인트들 (main_newnew.py와 동일한 로직)
-@app.get("/companies")
-def get_companies(db: Session = Depends(get_db)):
-    companies = db.query(Company).all()
-    return companies
+# @app.get("/companies/{company_id}")
+# def get_company(company_id: str, db: Session = Depends(get_db)):
+#     company = db.query(Company).filter(Company.id == company_id).first()
+#     if company is None:
+#         raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
+#     return company
 
-@app.get("/companies/{company_id}")
-def get_company(company_id: str, db: Session = Depends(get_db)):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if company is None:
-        raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
-    return company
+# @app.get("/companies/search/{keyword}")
+# def search_companies(keyword: str, db: Session = Depends(get_db)):
+#     companies = db.query(Company).filter(
+#         Company.name.ilike(f"%{keyword}%")
+#     ).all()
+#     return companies
 
-@app.get("/companies/search/{keyword}")
-def search_companies(keyword: str, db: Session = Depends(get_db)):
-    companies = db.query(Company).filter(
-        Company.name.ilike(f"%{keyword}%")
-    ).all()
-    return companies
-
-@app.post("/companies")
-def create_company(
-    company: dict, 
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    new_company = Company(**company)
-    db.add(new_company)
+# @app.post("/companies")
+# def create_company(
+#     company: dict, 
+#     db: Session = Depends(get_db),
+#     current_user: dict = Depends(get_current_user)
+# ):
+#     new_company = Company(**company)
+#     db.add(new_company)
     
-    try:
-        db.commit()
-        db.refresh(new_company)
-        return new_company
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"회사 생성 중 오류가 발생했습니다: {str(e)}"
-        )
+#     try:
+#         db.commit()
+#         db.refresh(new_company)
+#         return new_company
+#     except Exception as e:
+#         db.rollback()
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"회사 생성 중 오류가 발생했습니다: {str(e)}"
+#         )
 
 # 등급 관련 엔드포인트들 (main_newnew.py와 동일한 로직)
 @app.get("/grades")

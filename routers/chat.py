@@ -50,7 +50,7 @@ def get_token_header(token: str = Depends(HTTPBearer())):
 # ===== 대화 관련 API =====
 
 @router.post("/conversations", status_code=201)
-def create_conversation(
+async def create_conversation(
     conversation: ConversationCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -62,16 +62,16 @@ def create_conversation(
             # 현재 사용자와 상대방으로 구성된 기존 대화방 찾기
             existing_conversation = db.query(Conversation).join(ConversationMember).filter(
                 Conversation.is_group == False,
-                ConversationMember.user_id == current_user["id"]
-            ).join(ConversationMember, Conversation.id == ConversationMember.conversation_id).filter(
-                ConversationMember.user_id == conversation.member_ids[0]
+                ConversationMember.user_id.in_([current_user["id"], conversation.member_ids[0]])
+            ).group_by(Conversation.id).having(
+                func.count(ConversationMember.user_id) == 2
             ).first()
             
             if existing_conversation:
                 # 기존 대화방 정보 반환
                 return {
                     "message": "이미 존재하는 1:1 대화방입니다",
-                    "conversation_id": str(existing_conversation.id),
+                    "id": str(existing_conversation.id),
                     "title": existing_conversation.title,
                     "is_group": existing_conversation.is_group,
                     "existing": True
@@ -90,7 +90,7 @@ def create_conversation(
                 # 기존 그룹 채팅방 정보 반환
                 return {
                     "message": "이미 존재하는 그룹 채팅방입니다",
-                    "conversation_id": str(existing_group.id),
+                    "id": str(existing_group.id),
                     "title": existing_group.title,
                     "is_group": existing_group.is_group,
                     "existing": True
@@ -127,6 +127,87 @@ def create_conversation(
         db.commit()
         db.refresh(new_conversation)
         
+        # WebSocket을 통해 새 채팅방 생성 알림 전송
+        try:
+            # 새 채팅방 정보를 모든 멤버들에게 전송
+            conversation_data = {
+                "id": str(new_conversation.id),
+                "title": new_conversation.title,
+                "is_group": new_conversation.is_group,
+                "created_by": str(new_conversation.created_by),
+                "created_at": new_conversation.created_at.isoformat(),
+                "member_count": len(conversation.member_ids) + 1,
+                "participants": []
+            }
+            
+            # 참여자 정보 추가 (프로필 정보 조회)
+            participants = []
+            all_member_ids = [current_user["id"]] + conversation.member_ids
+            
+            if supabase and all_member_ids:
+                try:
+                    profile_result = supabase.table('profiles').select('*').in_('id', all_member_ids).execute()
+                    if profile_result.data:
+                        profiles_data = {profile['id']: profile for profile in profile_result.data}
+                        
+                        for member_id in all_member_ids:
+                            if str(member_id) != str(current_user["id"]):  # 현재 사용자 제외
+                                profile = profiles_data.get(str(member_id), {})
+                                participants.append({
+                                    "id": str(member_id),
+                                    "name": profile.get('name', f'사용자 {str(member_id)[:8]}') if profile else f'사용자 {str(member_id)[:8]}',
+                                    "avatar": profile.get('avatar', '') if profile else '',
+                                    "role": "admin" if str(member_id) == str(current_user["id"]) else "member"
+                                })
+                except Exception as profile_error:
+                    logger.warning(f"참여자 프로필 정보 조회 실패: {profile_error}")
+            
+            conversation_data["participants"] = participants
+            
+            # WebSocket 메시지 데이터
+            websocket_message = {
+                "type": "conversation_created",
+                "conversation": conversation_data,
+                "created_by": current_user["id"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # 모든 멤버들에게 새 채팅방 생성 알림 전송
+            for member_id in all_member_ids:
+                try:
+                    await manager.send_personal_message(
+                        websocket_message, 
+                        str(member_id)
+                    )
+                    print(f"새 채팅방 생성 알림 전송 완료: {member_id}")
+                except Exception as member_error:
+                    logger.warning(f"멤버 {member_id}에게 알림 전송 실패: {member_error}")
+            
+            # 채팅 리스트 업데이트 전송 (모든 멤버에게)
+            try:
+                chat_list_update_data = {
+                    "conversation": conversation_data,
+                    "action": "created",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                for member_id in all_member_ids:
+                    await manager.send_chat_list_update(
+                        str(new_conversation.id),
+                        "conversation_created",
+                        chat_list_update_data,
+                        target_user=str(member_id)
+                    )
+                
+                print(f"채팅 리스트 업데이트 전송 완료: {len(all_member_ids)}명")
+                
+            except Exception as update_error:
+                logger.error(f"채팅 리스트 업데이트 전송 실패: {update_error}")
+            
+        except Exception as ws_error:
+            logger.error(f"WebSocket 채팅방 생성 알림 전송 실패: {ws_error}")
+            # WebSocket 실패해도 HTTP 응답은 성공
+        
         # 데이터베이스 로그 생성
         try:
             create_database_log(
@@ -148,7 +229,7 @@ def create_conversation(
         
         return {
             "message": "대화가 성공적으로 생성되었습니다",
-            "conversation_id": str(new_conversation.id),
+            "id": str(new_conversation.id),
             "title": new_conversation.title,
             "is_group": new_conversation.is_group,
             "member_count": len(conversation.member_ids) + 1
@@ -176,7 +257,7 @@ def get_conversations(
         ).options(
             joinedload(Conversation.members),
             joinedload(Conversation.messages)
-        ).order_by(desc(Conversation.created_at))
+        )
         
         # 전체 항목 수 계산
         total_count = query.count()
@@ -236,7 +317,24 @@ def get_conversations(
             except Exception as e:
                 logger.warning(f"대화방 읽음 상태 배치 조회 실패: {e}")
         
+        # 5. 각 대화방의 마지막 메시지 시간을 기준으로 정렬
+        conversations_with_last_message = []
         for conv in conversations:
+            last_message_time = None
+            if conv.messages:
+                last_msg = max(conv.messages, key=lambda x: x.created_at)
+                last_message_time = last_msg.created_at
+            else:
+                # 메시지가 없는 대화방은 생성 시간으로 정렬
+                last_message_time = conv.created_at
+            
+            conversations_with_last_message.append((conv, last_message_time))
+        
+        # 마지막 메시지 시간 기준으로 내림차순 정렬 (최신 순)
+        conversations_with_last_message.sort(key=lambda x: x[1], reverse=True)
+        
+        # 정렬된 대화방들로 결과 구성
+        for conv, last_message_time in conversations_with_last_message:
             # 대화방 제목 결정
             conversation_title = conv.title
             
@@ -289,7 +387,7 @@ def get_conversations(
                     participants.append({
                         "id": member_id_str,
                         "name": profile.get('name', f'사용자 {member_id_str[:8]}') if profile else f'사용자 {member_id_str[:8]}',
-                        "avatar": profile.get('avatar_url', '') if profile else '',
+                        "avatar": profile.get('avatar', '') if profile else '',
                         "role": member.role
                     })
             
@@ -662,7 +760,7 @@ async def create_message(
                         sender_info = {
                             "id": current_user["id"],
                             "name": profile.get('name', '사용자'),
-                            "avatar": profile.get('avatar_url', ''),
+                            "avatar": profile.get('avatar', ''),
                             "role": profile.get('role', 'user'),
                             "department": profile.get('department', '')
                         }
@@ -689,8 +787,8 @@ async def create_message(
                 })
             
             # 메시지 타입 및 정렬 정보
-            message_type = "own"  # 발신자는 항상 "own"
-            alignment = "right"   # 발신자는 항상 "right"
+            message_type = "other"  # 받는 사람 입장에서는 "other"
+            alignment = "left"      # 받는 사람 입장에서는 "left"
             
             # 완전한 메시지 데이터 준비
             complete_message_data = {
@@ -704,7 +802,7 @@ async def create_message(
                 "deleted_at": None,
                 
                 # 메시지 구분을 위한 필드들
-                "is_own_message": True,
+                "is_own_message": False,  # 받는 사람 입장에서는 False
                 "message_type": message_type,
                 "alignment": alignment,
                 
@@ -835,7 +933,7 @@ async def create_message(
                     conversation_id, 
                     "new_message", 
                     chat_list_update_data, 
-                    exclude_user=current_user["id"]
+                    target_user=current_user["id"]
                 )
                 
             except Exception as update_error:
@@ -890,9 +988,9 @@ async def create_message(
             "deleted_at": None,
             
             # 메시지 구분을 위한 필드들
-            "is_own_message": True,
-            "message_type": "own",
-            "alignment": "right",
+            "is_own_message": False,  # 받는 사람 입장에서는 False
+            "message_type": "other",  # 받는 사람 입장에서는 "other"
+            "alignment": "left",      # 받는 사람 입장에서는 "left"
             
             # 발신자 정보
             "sender_info": sender_info,
@@ -908,7 +1006,7 @@ async def create_message(
             # 프론트엔드 처리를 위한 추가 필드
             "show_avatar": False,
             "show_name": False,
-            "css_class": "message-own message-right"
+            "css_class": "message-other message-left"
         }
         
         return response_data
@@ -1008,7 +1106,7 @@ def get_messages(
             sender_info = {
                 "id": sender_id,
                 "name": profile.get('name', '사용자'),
-                "avatar": profile.get('avatar_url', ''),
+                "avatar": profile.get('avatar', ''),
                 "role": profile.get('role', 'user'),
                 "department": profile.get('department', '')
             } if profile else {
@@ -1048,7 +1146,7 @@ def get_messages(
             # 메시지 타입 및 정렬 정보
             message_type = "own" if is_own_message else "other"
             alignment = "right" if is_own_message else "left"
-            
+
             message_data = {
                 "id": str(msg.id),
                 "conversation_id": str(msg.conversation_id),
@@ -1076,8 +1174,8 @@ def get_messages(
                 "is_read": is_read,
                 
                 # 프론트엔드 처리를 위한 추가 필드
-                "show_avatar": not is_own_message,  # 상대방 메시지만 아바타 표시
-                "show_name": not is_own_message and conversation.is_group,  # 그룹채팅에서만 상대방 이름 표시
+                "show_avatar": True,  # 상대방 메시지만 아바타 표시
+                "show_name": True,  # 그룹채팅에서만 상대방 이름 표시
                 "css_class": f"message-{message_type} message-{alignment}"
             }
             result.append(message_data)
@@ -2145,7 +2243,7 @@ async def get_all_users(
                 "id": user_id,
                 "email": user.get('email', ''),  # profiles에 email 필드가 있다면
                 "name": user.get('name', '사용자'),
-                "avatar": user.get('avatar_url', ''),
+                "avatar": user.get('avatar', ''),
                 "role": user.get('role', 'user'),
                 "department": user.get('department', ''),
                 "position": user.get('position', ''),
@@ -2161,8 +2259,25 @@ async def get_all_users(
         # 전체 페이지 수 계산
         total_pages = (total_count + page_size - 1) // page_size
         
+        # department 기준으로 그룹화
+        users_by_department = {}
+        for user in users:
+            department = user.get('department', '부서 미지정')
+            if department not in users_by_department:
+                users_by_department[department] = []
+            users_by_department[department].append(user)
+        
+        # 각 부서별로 사용자 수 계산
+        department_stats = {}
+        for department, dept_users in users_by_department.items():
+            department_stats[department] = {
+                "count": len(dept_users),
+                "users": dept_users
+            }
+        
         return {
             "users": users,
+            "users_by_department": department_stats,
             "total": total_count,
             "page": page,
             "page_size": page_size,
@@ -2216,7 +2331,7 @@ async def get_users_online_status(
                 "id": user_id,
                 "name": user.get('full_name', '사용자'),
                 "email": user.get('email', ''),
-                "avatar": user.get('avatar_url', ''),
+                "avatar": user.get('avatar'),
                 "online": is_online,
                 "last_seen": None,  # profiles에는 last_sign_in_at이 없을 수 있음
                 "status": "オンライン" if is_online else "オフライン",

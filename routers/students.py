@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_, and_
 from typing import Optional, List
 from database import SessionLocal, engine
-from models import Student, Company, Grade, Room, Building, ResidenceCardHistory, Resident, BillingMonthlyItem
+from models import Student, Company, Grade, Room, Building, ResidenceCardHistory, Resident, BillingMonthlyItem, Department
 from schemas import StudentCreate, StudentUpdate, StudentResponse, VisaInfoUpdate, NewResidenceRequest, BillingMonthlyItemCreate, BillingMonthlyItemUpdate, MonthlyItemSortOrderUpdate
 from datetime import datetime, date, timedelta
 import uuid
@@ -54,7 +54,7 @@ def get_students(
     name: Optional[str] = Query(None, description="학생 이름으로 검색"),
     name_katakana: Optional[str] = Query(None, description="학생 이름 카타카나로 검색"),
     nationality: Optional[str] = Query(None, description="학생 국적으로 검색"),
-    company: Optional[str] = Query(None, description="회사 이름으로 검색"),
+    department: Optional[str] = Query(None, description="부서 이름으로 검색"),
     consultant: Optional[int] = Query(None, description="컨설턴트 번호 이상으로 검색"),
     email: Optional[str] = Query(None, description="이메일로 검색"),
     student_type: Optional[str] = Query(None, description="학생 유형으로 검색"),
@@ -67,15 +67,16 @@ def get_students(
     sort_desc: Optional[bool] = Query(False, description="내림차순 정렬 여부 (true: 내림차순, false: 오름차순)"),
     page: int = Query(1, description="페이지 번호", ge=1),
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생 목록 조회 (검색, 필터링, 정렬, 페이지네이션 지원)"""
     # 기본 쿼리 생성
     query = db.query(Student).options(
-        joinedload(Student.company),
         joinedload(Student.grade),
+        joinedload(Student.department).joinedload(Department.company),
         joinedload(Student.current_room).joinedload(Room.building)
-    ).outerjoin(Company).outerjoin(Grade)
+    ).outerjoin(Grade).outerjoin(Department, Student.department_id == Department.id)
 
     # 방 관련 필터링이 있는 경우 Room과 Building 테이블과 조인
     if building_name or room_number:
@@ -90,8 +91,8 @@ def get_students(
         query = query.filter(Student.nationality.ilike(f"%{nationality}%"))
     if name_katakana:
         query = query.filter(Student.name_katakana.ilike(f"%{name_katakana}%"))
-    if company:
-        query = query.filter(Company.name.ilike(f"%{company}%"))
+    if department:
+        query = query.filter(Department.id == department)
     if consultant is not None:
         query = query.filter(Student.consultant >= consultant)
     if email:
@@ -144,12 +145,30 @@ def get_students(
     # 응답 데이터 준비
     result = []
     for student in students:
+        # 부서 정보 구성 (회사 이름 + 부서 이름)
+        department_info = None
+        if student.department:
+            if student.department.name == "-":
+                # 부서 이름이 "-"인 경우 회사 이름만 표시
+                department_display_name = student.department.company.name if student.department.company else student.department.name
+            else:
+                # 부서 이름이 "-"가 아닌 경우 "회사 이름 - 부서 이름" 형태로 표시
+                company_name = student.department.company.name if student.department.company else ""
+                department_display_name = f"{company_name} - {student.department.name}" if company_name else student.department.name
+            
+            department_info = {
+                "id": str(student.department.id),
+                "name": department_display_name,
+                "department_name": student.department.name,
+                "company_name": student.department.company.name if student.department.company else None
+            }
+
         student_data = {
             "id": str(student.id),
             "name": student.name,
             "email": student.email if student.email else "",
             "created_at": student.created_at,
-            "company_id": str(student.company_id) if student.company_id else None,
+            "department_id": str(student.department_id) if student.department_id else None,
             "consultant": student.consultant,
             "phone": student.phone,
             "avatar": student.avatar,
@@ -176,9 +195,7 @@ def get_students(
             "arrival_type": student.arrival_type,
             "student_type": student.student_type,
             "note": student.note,
-            "company": {
-                "name": student.company.name
-            } if student.company else None,
+            "department": department_info,
             "grade": {
                 "name": student.grade.name
             } if student.grade else None,
@@ -205,9 +222,10 @@ def get_students_expiring_soon(
     student_type: Optional[str] = Query(None, description="학생 유형으로 검색"),
     page: int = Query(1, description="페이지 번호", ge=1),
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
-    """재류기간 만료가 임박한 학생들을 조회 (기본값: 4개월 전부터)"""
+    """재류기간 만료가 임박한 학생들을 조회 (기본값: 4개월 전부터) - 만료된 학생도 포함"""
     try:
         # 현재 날짜
         current_date = datetime.now().date()
@@ -215,13 +233,13 @@ def get_students_expiring_soon(
         # 만료 예정 날짜 계산 (현재 날짜 + 지정된 개월 수)
         target_date = current_date + timedelta(days=months_ahead * 30)  # 대략적인 계산
         
-        # 재류기간 만료가 임박한 학생들 조회
+        # 재류기간 만료가 임박한 학생들 조회 (만료된 학생도 포함, 퇴직자 제외)
         query = db.query(Student).options(
             joinedload(Student.grade)
         ).filter(
             Student.residence_card_expiry.isnot(None),  # 재류기간 만료일이 있는 학생만
-            Student.residence_card_expiry <= target_date,  # 만료 예정일 이내
-            Student.residence_card_expiry >= current_date  # 아직 만료되지 않은 학생
+            Student.residence_card_expiry <= target_date,  # 만료 예정일 이내 (만료된 학생 포함)
+            Student.status != "RESIGNED"  # 퇴직자가 아닌 학생만
         ).order_by(Student.residence_card_expiry.asc())  # 만료일이 빠른 순으로 정렬
         
         if student_type:
@@ -272,10 +290,10 @@ def get_students_expiring_soon(
         raise HTTPException(status_code=500, detail=f"エラーが発生しました: {str(e)}")
 
 @router.get("/{student_id}")
-def get_student(student_id: str, db: Session = Depends(get_db)):
+def get_student(student_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """특정 학생 상세 정보 조회"""
     student = db.query(Student).options(
-        joinedload(Student.company), 
+        joinedload(Student.department),
         joinedload(Student.grade),
         joinedload(Student.current_room).joinedload(Room.building)
     ).filter(Student.id == student_id).first()
@@ -289,7 +307,7 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
         "name": student.name,
         "email": student.email if student.email else "",
         "created_at": student.created_at,
-        "company_id": str(student.company_id) if student.company_id else None,
+        "department_id": str(student.department_id) if student.department_id else None,
         "consultant": student.consultant,
         "phone": student.phone,
         "avatar": student.avatar,
@@ -326,10 +344,10 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
         "facebook_name": student.facebook_name,
         "visa_year": student.visa_year,
         "note": student.note,
-        "company": {
-            "id": str(student.company.id),
-            "name": student.company.name
-        } if student.company else None,
+        "department": {
+            "id": str(student.department.id),
+            "name": student.department.name
+        } if student.department else None,
         "grade": {
             "id": str(student.grade.id),
             "name": student.grade.name
@@ -380,7 +398,7 @@ def create_student(
         new_student = Student(
             id=str(uuid.uuid4()),
             name=student.name,
-            company_id=parse_uuid(student.company_id) if student.company_id else None,
+            department_id=parse_uuid(student.department_id) if student.department_id else None,
             consultant=student.consultant,
             grade_id=parse_uuid(student.grade_id) if student.grade_id else None,
             cooperation_submitted_date=parse_date(student.cooperation_submitted_date),
@@ -461,14 +479,14 @@ def create_student(
                 user_id=current_user["id"] if current_user else None,
                 new_values={
                     "name": new_student.name,
-                    "company_id": str(new_student.company_id) if new_student.company_id else None,
+                    "department_id": str(new_student.department_id) if new_student.department_id else None,
                     "consultant": new_student.consultant,
                     "grade_id": str(new_student.grade_id) if new_student.grade_id else None,
                     "nationality": new_student.nationality,
                     "student_type": new_student.student_type,
                     "status": new_student.status
                 },
-                changed_fields=["name", "company_id", "consultant", "grade_id", "nationality", "student_type", "status"],
+                changed_fields=["name", "department_id", "consultant", "grade_id", "nationality", "student_type", "status"],
                 note=f"新規学生作成 - {new_student.name}"
             )
         except Exception as log_error:
@@ -480,7 +498,6 @@ def create_student(
                 "id": str(new_student.id),
                 "name": new_student.name,
                 "email": new_student.email,
-                "company_id": str(new_student.company_id) if new_student.company_id else None
             }
         }
         
@@ -514,9 +531,9 @@ def update_student(
         )
 
     # 회사 존재 여부 확인 (회사가 변경되는 경우)
-    if student_update.company_id:
-        company = db.query(Company).filter(Company.id == student_update.company_id).first()
-        if not company:
+    if student_update.department_id:
+        department = db.query(Department).filter(Department.id == student_update.department_id).first()
+        if not department:
             raise HTTPException(
                 status_code=404,
                 detail="存在しない会社です"
@@ -567,7 +584,7 @@ def update_student(
     # 기존 값 저장 (로그용)
     old_values = {
         "name": student.name,
-        "company_id": str(student.company_id) if student.company_id else None,
+        "department_id": str(student.department_id) if student.department_id else None,
         "consultant": student.consultant,
         "grade_id": str(student.grade_id) if student.grade_id else None,
         "nationality": student.nationality,
@@ -613,7 +630,7 @@ def update_student(
                 old_values=old_values,
                 new_values={
                     "name": student.name,
-                    "company_id": str(student.company_id) if student.company_id else None,
+                    "department_id": str(student.department_id) if student.department_id else None,
                     "consultant": student.consultant,
                     "grade_id": str(student.grade_id) if student.grade_id else None,
                     "nationality": student.nationality,
@@ -633,7 +650,7 @@ def update_student(
             "id": str(student.id),
             "name": student.name,
             "email": student.email if student.email else "",
-            "company_id": str(student.company_id) if student.company_id else None,
+            "department_id": str(student.department_id) if student.department_id else None,
             "consultant": student.consultant,
             "avatar": student.avatar,
             "created_at": student.created_at
@@ -784,7 +801,8 @@ def get_student_residence_card_history(
     student_id: str,
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생의 Residence Card 히스토리 조회"""
     # 학생 존재 여부 확인
@@ -841,7 +859,8 @@ def get_student_residence_history(
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
     is_active: Optional[bool] = Query(None, description="활성 상태로 필터링"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생 거주 이력 조회"""
     try:
@@ -929,7 +948,8 @@ def get_student_monthly_residence_history(
     student_id: str,
     year: int,
     month: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생 월별 거주 이력 조회"""
     try:
@@ -1363,7 +1383,8 @@ def create_new_residence(
 def get_student_monthly_items(
     student_id: str,
     year: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생의 월별 관리비 항목 조회"""
     try:
@@ -1919,7 +1940,8 @@ def get_student_room_charges(
     student_id: str,
     page: int = Query(1, description="페이지 번호", ge=1),
     page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생의 방 요금 조회"""
     try:
@@ -1990,7 +2012,7 @@ def test_students_endpoint(
         # 학생 데이터 조회
         students = db.query(Student).options(
             joinedload(Student.grade),
-            joinedload(Student.company)
+            joinedload(Student.department)
         ).limit(limit).all()
         
         # 응답 데이터 구성
@@ -2001,7 +2023,7 @@ def test_students_endpoint(
                 "name": student.name,
                 "email": student.email,
                 "grade_name": student.grade.name if student.grade else None,
-                "company_name": student.company.name if student.company else None,
+                "department_name": student.department.name if student.department else None,
                 "status": student.status,
                 "entry_date": student.entry_date
             }
@@ -2212,7 +2234,8 @@ def get_student_residence_card_histories(
     student_id: str,
     page: int = Query(1, description="페이지 번호", ge=1),
     size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """학생의 모든 Residence Card History 조회"""
     try:
