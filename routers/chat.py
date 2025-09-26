@@ -1754,20 +1754,20 @@ async def mark_conversation_as_read(
             
             # WebSocket으로 읽음 상태 업데이트 알림
             try:
-                websocket_message = {
-                    "type": "conversation_read_all",
-                    "conversation_id": str(conversation_id),
-                    "user_id": current_user["id"],
-                    "read_count": len(read_records),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
+                # websocket_message = {
+                #     "type": "conversation_read_all",
+                #     "conversation_id": str(conversation_id),
+                #     "user_id": current_user["id"],
+                #     "read_count": len(read_records),
+                #     "timestamp": datetime.utcnow().isoformat()
+                # }
                 
-                # 대화방의 다른 멤버들에게 읽음 상태 업데이트 알림
-                await manager.send_to_conversation(
-                    websocket_message, 
-                    str(conversation_id), 
-                    exclude_user=current_user["id"]
-                )
+                # # 대화방의 다른 멤버들에게 읽음 상태 업데이트 알림
+                # await manager.send_to_conversation(
+                #     websocket_message, 
+                #     str(conversation_id), 
+                #     exclude_user=current_user["id"]
+                # )
                 
                 # 채팅 리스트 업데이트 전송 (읽지 않은 메시지 수 초기화)
                 chat_list_update_data = {
