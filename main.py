@@ -43,7 +43,6 @@ from utils.dependencies import get_current_user
 from routers import auth, contact, residents, students, billing, elderly, companies, grades, buildings, rooms
 from routers import users, upload, room_operations, room_charges, room_utilities, monthly_billing, elderly_care, database_logs
 from routers import invoices, monthly_utilities, chat, websocket
-from routers import push  # 푸시 라우터 추가
 
 # FastAPI 앱 생성
 app = FastAPI(
