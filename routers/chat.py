@@ -23,6 +23,8 @@ import os
 from supabase import create_client
 from utils.dependencies import get_current_user
 from utils.websocket_manager import manager
+from utils.webpush_service import webpush_service
+import asyncio
 
 # 로거 설정
 logger = logging.getLogger(__name__)
@@ -226,6 +228,21 @@ async def create_conversation(
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
+        
+        # 메시지 전송 함수에서 푸시 알림 추가 (기존 WebSocket 전송 후)
+        try:
+            # 푸시 알림 전송 (백그라운드에서 실행)
+            asyncio.create_task(webpush_service.send_chat_notification(
+                conversation_id=str(new_conversation.id),
+                sender_name=current_user["name"],
+                message_body=conversation.title,
+                conversation_title=conversation.title,
+                exclude_user_id=current_user["id"]
+            ))
+            logger.info(f"푸시 알림 전송 요청: {str(new_conversation.id)}")
+        except Exception as push_error:
+            logger.error(f"푸시 알림 전송 실패: {push_error}")
+            # 푸시 알림 실패해도 메시지 전송은 계속 진행
         
         return {
             "message": "대화가 성공적으로 생성되었습니다",
@@ -1008,6 +1025,21 @@ async def create_message(
             "show_name": False,
             "css_class": "message-other message-left"
         }
+        
+        # 메시지 전송 함수에서 푸시 알림 추가 (기존 WebSocket 전송 후)
+        try:
+            # 푸시 알림 전송 (백그라운드에서 실행)
+            asyncio.create_task(webpush_service.send_chat_notification(
+                conversation_id=conversation_id,
+                sender_name=sender_info["name"] if sender_info else "사용자",
+                message_body=clean_body if clean_body else body,
+                conversation_title=conversation.title,
+                exclude_user_id=current_user["id"]
+            ))
+            logger.info(f"푸시 알림 전송 요청: {conversation_id}")
+        except Exception as push_error:
+            logger.error(f"푸시 알림 전송 실패: {push_error}")
+            # 푸시 알림 실패해도 메시지 전송은 계속 진행
         
         return response_data
         

@@ -731,3 +731,21 @@ class Reaction(Base):
     @property
     def user_info(self):
         return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class PushSubscription(Base):
+    """웹 푸시 구독 정보"""
+    __tablename__ = "push_subscriptions"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)  # Supabase auth.users(id) 참조
+    endpoint = Column(Text, nullable=False)  # 푸시 서비스 엔드포인트
+    p256dh_key = Column(String, nullable=False)  # P256DH 공개 키
+    auth_key = Column(String, nullable=False)  # 인증 키
+    is_active = Column(Boolean, default=True)  # 구독 활성 상태
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def user_info(self):
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
