@@ -73,7 +73,7 @@ def get_contact(
                 user_profile = db.query(Profiles).filter(Profiles.id == current_user["id"]).first()
                 if user_profile:
                     user_role = user_profile.role if hasattr(user_profile, 'role') else "user"
-                    is_admin = user_role in ["admin", "super_admin", "manager"]
+                    is_admin = user_role in ["admin", "super_admin", "manager", "mishima_user"]
             except Exception as e:
                 print(f"사용자 권한 확인 중 오류: {e}")
                 user_role = "user"
