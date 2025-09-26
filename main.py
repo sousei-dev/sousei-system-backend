@@ -91,15 +91,17 @@ app.include_router(auth.router)
 app.include_router(students.router)
 app.include_router(billing.router)
 app.include_router(elderly.router)
-app.include_router(companies.router)
+app.include_router(companies.router)  # 간단한 버전으로 대체
+# app.include_router(grades.router)  # 간단한 버전으로 대체
 app.include_router(buildings.router)
-app.include_router(rooms.router)
+app.include_router(rooms.router)  # 모든 /rooms API가 여기에 통합됨
 
 # 새로 추가된 라우터들
 app.include_router(users.router)
 app.include_router(upload.router)
+# app.include_router(room_operations.router)  # /rooms API가 rooms.py로 이동됨
 app.include_router(room_charges.router)
-app.include_router(room_utilities.router)
+app.include_router(room_utilities.router)  # /rooms API가 rooms.py로 이동됨
 app.include_router(monthly_billing.router)
 app.include_router(elderly_care.router)
 app.include_router(database_logs.router)
@@ -107,12 +109,14 @@ app.include_router(database_logs.router)
 # 최종 추가된 라우터들
 app.include_router(invoices.router)
 app.include_router(residents.router)
-app.include_router(contact.router)
+app.include_router(contact.router)  # Contact 모델 수정 완료로 다시 활성화
+# app.include_router(monthly_utilities.router)  # /rooms API가 rooms.py로 이동됨
 
-# 채팅 및 푸시 라우터 추가
+# 채팅 라우터 추가
 app.include_router(chat.router)
+
+# WebSocket 라우터 추가
 app.include_router(websocket.router)
-app.include_router(push.router)  # 푸시 라우터 추가
 
 # 루트 엔드포인트
 @app.get("/")
