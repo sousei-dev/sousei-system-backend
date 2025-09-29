@@ -285,8 +285,7 @@ async def send_push_notification_to_conversation(
                 
                 # 사용자의 활성 구독 조회
                 subscriptions = db.query(PushSubscription).filter(
-                    PushSubscription.user_id == member.user_id,
-                    PushSubscription.is_active == True
+                    PushSubscription.user_id == member.user_id
                 ).all()
                 
                 for subscription in subscriptions:
