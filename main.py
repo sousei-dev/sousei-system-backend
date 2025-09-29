@@ -448,20 +448,6 @@ async def send_push_notification_to_conversation(
                             "notification": {
                                 "title": title,
                                 "body": message_body,
-                                "icon": "/static/icons/icon-192x192.png",
-                                "badge": "/static/icons/badge-72x72.png",
-                                "vibrate": [200, 100, 200],
-                                "requireInteraction": True,
-                                "actions": [
-                                    {
-                                        "action": "open",
-                                        "title": "열기"
-                                    },
-                                    {
-                                        "action": "close",
-                                        "title": "닫기"
-                                    }
-                                ],
                                 "data": {
                                     "type": "chat_message",
                                     "conversation_id": conversation_id,
