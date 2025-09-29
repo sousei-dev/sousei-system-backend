@@ -185,23 +185,57 @@ VAPID_PRIVATE_KEY_PATH = os.getenv("VAPID_PRIVATE_KEY_PATH", "vapid_private_key.
 # VAPID 키를 올바른 형식으로 변환하는 함수 (디버깅 추가)
 def get_vapid_private_key():
     """VAPID 개인키를 pywebpush에서 사용할 수 있는 형식으로 변환"""
+    print(f"=== VAPID 개인키 디버깅 시작 ===")
+    print(f"VAPID_PRIVATE_KEY_PATH: {VAPID_PRIVATE_KEY_PATH}")
+    print(f"현재 작업 디렉토리: {os.getcwd()}")
+    
     try:
         # 파일 경로가 존재하는지 확인
-        if os.path.exists(VAPID_PRIVATE_KEY_PATH):
+        file_exists = os.path.exists(VAPID_PRIVATE_KEY_PATH)
+        print(f"파일 존재 여부: {file_exists}")
+        
+        if file_exists:
+            # 파일 크기 확인
+            file_size = os.path.getsize(VAPID_PRIVATE_KEY_PATH)
+            print(f"파일 크기: {file_size} bytes")
+            
+            # 파일 내용 미리보기
+            try:
+                with open(VAPID_PRIVATE_KEY_PATH, 'r') as f:
+                    content_preview = f.read()[:100] + "..."
+                print(f"파일 내용 미리보기: {content_preview}")
+            except Exception as e:
+                print(f"파일 읽기 오류: {e}")
+            
             logger.info(f"VAPID 개인키 파일 발견: {VAPID_PRIVATE_KEY_PATH}")
             return VAPID_PRIVATE_KEY_PATH
         
         # 환경변수에서 직접 가져온 개인키가 있다면 사용
         vapid_private_key = os.getenv("VAPID_PRIVATE_KEY")
+        print(f"환경변수 VAPID_PRIVATE_KEY 존재: {vapid_private_key is not None}")
         if vapid_private_key:
+            print(f"환경변수 VAPID_PRIVATE_KEY 길이: {len(vapid_private_key)}")
+            print(f"환경변수 VAPID_PRIVATE_KEY 미리보기: {vapid_private_key[:100]}...")
             logger.info("환경변수에서 VAPID 개인키 사용")
             return vapid_private_key
+        
+        # 디렉토리 내 .pem 파일들 확인
+        try:
+            current_dir = os.getcwd()
+            pem_files = [f for f in os.listdir(current_dir) if f.endswith('.pem')]
+            print(f"현재 디렉토리의 .pem 파일들: {pem_files}")
+        except Exception as e:
+            print(f"디렉토리 읽기 오류: {e}")
             
+        print("VAPID 개인키를 찾을 수 없습니다")
         logger.error("VAPID 개인키를 찾을 수 없습니다")
         return None
     except Exception as e:
+        print(f"VAPID 개인키 처리 실패: {e}")
         logger.error(f"VAPID 개인키 처리 실패: {e}")
         return None
+    finally:
+        print(f"=== VAPID 개인키 디버깅 끝 ===")
 
 # VAPID 클레임을 동적으로 생성하는 함수 (디버깅 추가)
 def get_vapid_claims(endpoint):
