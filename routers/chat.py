@@ -1817,12 +1817,12 @@ async def mark_conversation_as_read(
                 except Exception as count_error:
                     logger.error(f"읽지 않은 메시지 수 계산 실패: {count_error}")
                 
-                await manager.send_chat_list_update(
-                    str(conversation_id),
-                    "conversation_read_all",
-                    chat_list_update_data
-                )
-                print(f"대화방 전체 읽음 채팅 리스트 업데이트 전송 완료")
+                # await manager.send_chat_list_update(
+                #     str(conversation_id),
+                #     "conversation_read_all",
+                #     chat_list_update_data
+                # )
+                # print(f"대화방 전체 읽음 채팅 리스트 업데이트 전송 완료")
             except Exception as ws_error:
                 logger.warning(f"WebSocket 읽음 상태 알림 실패: {ws_error}")
             
