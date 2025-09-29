@@ -333,6 +333,62 @@ async def save_subscription(request: Request, db: Session = Depends(get_db)):
             detail="푸시 구독 저장에 실패했습니다"
         )
 
+@app.post("/push/remove-subscription")
+async def remove_subscription(request: Request, db: Session = Depends(get_db)):
+    """푸시 구독 삭제"""
+    try:
+        data = await request.json()
+        
+        # endpoint 필수 확인
+        endpoint = data.get("endpoint")
+        if not endpoint:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="endpoint가 필요합니다"
+            )
+        
+        # userId가 있으면 해당 사용자의 구독만 삭제, 없으면 endpoint로만 삭제
+        user_id = data.get("userId")
+        
+        if user_id:
+            # 특정 사용자의 구독 삭제
+            subscription = db.query(PushSubscription).filter(
+                PushSubscription.user_id == user_id,
+                PushSubscription.endpoint == endpoint
+            ).first()
+        else:
+            # endpoint로만 구독 삭제
+            subscription = db.query(PushSubscription).filter(
+                PushSubscription.endpoint == endpoint
+            ).first()
+        
+        if not subscription:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="해당 구독을 찾을 수 없습니다"
+            )
+        
+        # 구독 삭제
+        db.delete(subscription)
+        db.commit()
+        
+        logger.info(f"푸시 구독 삭제 성공: endpoint={endpoint[:50]}..., user_id={user_id}")
+        return {
+            "status": "deleted", 
+            "message": "구독이 성공적으로 삭제되었습니다",
+            "subscription_id": str(subscription.id)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"푸시 구독 삭제 실패: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="푸시 구독 삭제에 실패했습니다"
+        )
+
 # VAPID 공개키를 반환하는 엔드포인트 추가
 @app.get("/push/vapid-public-key")
 async def get_vapid_public_key():
