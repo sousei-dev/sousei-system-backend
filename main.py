@@ -445,18 +445,40 @@ async def send_push_notification_to_conversation(
                         logger.info(f"구독 정보: endpoint={subscription.endpoint[:50]}..., p256dh={subscription.p256dh[:20]}..., auth={subscription.auth[:20]}...")
                         
                         payload = {
-                            "title": title,
-                            "body": message_body,
-                            "icon": "/static/icons/icon-192x192.png",
-                            "badge": "/static/icons/badge-72x72.png",
-                            "url": f"/chat/{conversation_id}",
+                            "notification": {
+                                "title": title,
+                                "body": message_body,
+                                "icon": "/static/icons/icon-192x192.png",
+                                "badge": "/static/icons/badge-72x72.png",
+                                "vibrate": [200, 100, 200],
+                                "requireInteraction": True,
+                                "actions": [
+                                    {
+                                        "action": "open",
+                                        "title": "열기"
+                                    },
+                                    {
+                                        "action": "close",
+                                        "title": "닫기"
+                                    }
+                                ],
+                                "data": {
+                                    "type": "chat_message",
+                                    "conversation_id": conversation_id,
+                                    "sender_name": sender_name,
+                                    "url": f"/chat/{conversation_id}"
+                                }
+                            },
                             "data": {
                                 "type": "chat_message",
                                 "conversation_id": conversation_id,
-                                "sender_name": sender_name
+                                "sender_name": sender_name,
+                                "url": f"/chat/{conversation_id}"
                             }
                         }
                         
+                        logger.info(f"푸시 페이로드: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+
                         # webpush 호출 시 동적 클레임 사용
                         vapid_claims = get_vapid_claims(subscription.endpoint)
                         logger.info(f"사용할 VAPID 클레임: {vapid_claims}")
@@ -465,7 +487,11 @@ async def send_push_notification_to_conversation(
                             subscription_info=subscription_info,
                             data=json.dumps(payload),
                             vapid_private_key=vapid_private_key,
-                            vapid_claims=vapid_claims
+                            vapid_claims=vapid_claims,
+                            ttl=86400,  # 24시간
+                            headers={
+                                "Urgency": "high"
+                            }
                         )
                         
                         logger.info(f"푸시 알림 전송 성공: 구독 ID {subscription.id}")
@@ -502,11 +528,31 @@ async def send_push(request: Request):
 
     for sub in subscriptions:
         try:
+            # 표준 Web Push Notification 형식으로 페이로드 생성
+            payload = {
+                "notification": {
+                    "title": "알림",
+                    "body": message,
+                    "icon": "/static/icons/icon-192x192.png",
+                    "badge": "/static/icons/badge-72x72.png",
+                    "vibrate": [200, 100, 200],
+                    "requireInteraction": True
+                },
+                "data": {
+                    "type": "general_notification",
+                    "message": message
+                }
+            }
+            
             webpush(
                 subscription_info=sub,
-                data='{"title":"알림","body":"' + message + '"}',
+                data=json.dumps(payload),
                 vapid_private_key=vapid_private_key,
-                vapid_claims=VAPID_CLAIMS
+                vapid_claims=VAPID_CLAIMS,
+                ttl=86400,  # 24시간
+                headers={
+                    "Urgency": "high"
+                }
             )
         except WebPushException as ex:
             logger.error(f"푸시 전송 실패: {ex}")
