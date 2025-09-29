@@ -204,6 +204,7 @@ async def create_conversation(
             except Exception as update_error:
                 logger.error(f"채팅 리스트 업데이트 전송 실패: {update_error}")
             
+            
         except Exception as ws_error:
             logger.error(f"WebSocket 채팅방 생성 알림 전송 실패: {ws_error}")
             # WebSocket 실패해도 HTTP 응답은 성공
@@ -938,6 +939,23 @@ async def create_message(
                 
             except Exception as update_error:
                 logger.error(f"채팅 리스트 업데이트 전송 실패: {update_error}")
+                
+            # 푸시 알림 전송 (다른 화면에 있는 사용자들을 위해)
+            try:
+                import asyncio
+                from main import send_push_notification_to_conversation
+                
+                # 백그라운드에서 푸시 알림 전송
+                asyncio.create_task(send_push_notification_to_conversation(
+                    conversation_id=conversation_id,
+                    sender_name=sender_info["name"] if sender_info else "사용자",
+                    message_body=clean_body if clean_body else body,
+                    conversation_title=conversation.title,
+                    exclude_user_id=current_user["id"]
+                ))
+                logger.info(f"푸시 알림 전송 요청: {conversation_id}")
+            except Exception as push_error:
+                logger.error(f"푸시 알림 전송 실패: {push_error}")
             
         except Exception as ws_error:
             logger.error(f"WebSocket 메시지 전송 실패: {ws_error}")

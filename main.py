@@ -12,6 +12,10 @@ import logging
 from io import BytesIO
 from urllib.parse import quote
 from dotenv import load_dotenv
+from pywebpush import webpush, WebPushException
+from models import PushSubscription  # PushSubscription 모델 import 추가
+from datetime import datetime  # datetime import 추가
+import json
 
 # .env 파일 로드
 load_dotenv()
@@ -172,9 +176,186 @@ def get_grades(db: Session = Depends(get_db)):
 async def generate_company_invoice_pdf():
     return {"message": "Company Invoice PDF Generation Endpoint"}
 
+
+
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
+VAPID_CLAIMS = {"sub": "mailto:dev@sousei-group.com"}
+subscriptions = []  # 실제 운영에서는 Supabase 같은 DB에 저장
+
+@app.post("/push/save-subscription")
+async def save_subscription(request: Request, db: Session = Depends(get_db)):
+    try:
+        data = await request.json()
+        
+        # 데이터 구조에 맞게 파싱
+        user_id = data.get("userId")
+        subscription_data = data.get("subscription", {})
+        
+        if not user_id or not subscription_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="userId와 subscription 데이터가 필요합니다"
+            )
+        
+        endpoint = subscription_data.get("endpoint")
+        keys = subscription_data.get("keys", {})
+        expiration_time = subscription_data.get("expirationTime")
+        
+        if not endpoint or not keys.get("p256dh") or not keys.get("auth"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="subscription에 endpoint, p256dh, auth가 필요합니다"
+            )
+        
+        # 기존 구독이 있는지 확인
+        existing_subscription = db.query(PushSubscription).filter(
+            PushSubscription.user_id == user_id,
+            PushSubscription.endpoint == endpoint
+        ).first()
+        
+        if existing_subscription:
+            # 기존 구독 업데이트
+            existing_subscription.p256dh = keys["p256dh"]
+            existing_subscription.auth = keys["auth"]
+            existing_subscription.expiration_time = expiration_time
+            existing_subscription.updated_at = datetime.utcnow()
+            db.commit()
+            
+            logger.info(f"기존 푸시 구독 업데이트: {user_id}")
+            return {"status": "updated", "subscription_id": str(existing_subscription.id)}
+        else:
+            # 새 구독 생성
+            new_subscription = PushSubscription(
+                user_id=user_id,
+                endpoint=endpoint,
+                p256dh=keys["p256dh"],
+                auth=keys["auth"],
+                expiration_time=expiration_time
+            )
+            
+            db.add(new_subscription)
+            db.commit()
+            db.refresh(new_subscription)
+            
+            logger.info(f"새 푸시 구독 등록: {user_id}")
+            return {"status": "saved", "subscription_id": str(new_subscription.id)}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"푸시 구독 저장 실패: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="푸시 구독 저장에 실패했습니다"
+        )
+
+async def send_push_notification_to_conversation(
+    conversation_id: str, 
+    sender_name: str, 
+    message_body: str, 
+    conversation_title: Optional[str] = None,
+    exclude_user_id: Optional[str] = None
+):
+    """대화방의 모든 참여자에게 푸시 알림 전송"""
+    try:
+        db = SessionLocal()
+        try:
+            # 대화방 참여자 조회
+            from models import ConversationMember
+            members = db.query(ConversationMember).filter(
+                ConversationMember.conversation_id == conversation_id
+            ).all()
+            
+            # 메시지 본문이 너무 길면 잘라내기
+            if len(message_body) > 100:
+                message_body = message_body[:100] + "..."
+            
+            # 제목 설정
+            if conversation_title:
+                title = f"{conversation_title} - {sender_name}"
+            else:
+                title = f"{sender_name}님의 메시지"
+            
+            # 푸시 알림 전송
+            for member in members:
+                if exclude_user_id and member.user_id == exclude_user_id:
+                    continue
+                
+                # 사용자의 활성 구독 조회
+                subscriptions = db.query(PushSubscription).filter(
+                    PushSubscription.user_id == member.user_id,
+                    PushSubscription.is_active == True
+                ).all()
+                
+                for subscription in subscriptions:
+                    try:
+                        subscription_info = {
+                            "endpoint": subscription.endpoint,
+                            "keys": {
+                                "p256dh": subscription.p256dh_key,
+                                "auth": subscription.auth_key
+                            }
+                        }
+                        
+                        payload = {
+                            "title": title,
+                            "body": message_body,
+                            "icon": "/static/icons/icon-192x192.png",
+                            "badge": "/static/icons/badge-72x72.png",
+                            "url": f"/chat/{conversation_id}",
+                            "data": {
+                                "type": "chat_message",
+                                "conversation_id": conversation_id,
+                                "sender_name": sender_name
+                            }
+                        }
+                        
+                        webpush(
+                            subscription_info=subscription_info,
+                            data=json.dumps(payload),
+                            vapid_private_key=VAPID_PRIVATE_KEY,
+                            vapid_claims=VAPID_CLAIMS
+                        )
+                        
+                    except WebPushException as ex:
+                        logger.error(f"푸시 알림 전송 실패 (구독 ID: {subscription.id}): {ex}")
+                        if ex.response and ex.response.status_code == 410:
+                            subscription.is_active = False
+                            db.commit()
+                            logger.info(f"만료된 구독 비활성화: {subscription.id}")
+                    except Exception as e:
+                        logger.error(f"푸시 알림 전송 중 오류: {e}")
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"대화방 푸시 알림 전송 중 오류: {e}")
+
+@app.post("/push/send-push")
+async def send_push(request: Request):
+    body = await request.json()
+    message = body.get("message", "새 메시지가 도착했습니다!")
+
+    for sub in subscriptions:
+        try:
+            webpush(
+                subscription_info=sub,
+                data='{"title":"알림","body":"' + message + '"}',
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims=VAPID_CLAIMS
+            )
+        except WebPushException as ex:
+            print("푸시 전송 실패:", ex)
+
+    return {"status": "sent"}
+
 # 기타 필요한 엔드포인트들...
 # (필요에 따라 추가)
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 
+    
