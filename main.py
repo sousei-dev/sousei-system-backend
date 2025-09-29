@@ -178,8 +178,29 @@ async def generate_company_invoice_pdf():
 
 
 
-VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
-VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
+# VAPID 키 설정 수정
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "BDdBs4JFFA3CRGFaJ7qBSL1Kxur7E_ZEsYd7LOO0rYBIDXU1b5RvEwtRs48Jgb0Rx_J43Ow5ce8aPwovu5DEevY")
+VAPID_PRIVATE_KEY_PATH = os.getenv("VAPID_PRIVATE_KEY_PATH", "vapid_private_key.pem")
+
+# VAPID 키를 올바른 형식으로 변환하는 함수
+def get_vapid_private_key():
+    """VAPID 개인키를 pywebpush에서 사용할 수 있는 형식으로 변환"""
+    try:
+        # 파일 경로가 존재하는지 확인
+        if os.path.exists(VAPID_PRIVATE_KEY_PATH):
+            return VAPID_PRIVATE_KEY_PATH
+        
+        # 환경변수에서 직접 가져온 개인키가 있다면 사용
+        vapid_private_key = os.getenv("VAPID_PRIVATE_KEY")
+        if vapid_private_key:
+            return vapid_private_key
+            
+        logger.error("VAPID 개인키를 찾을 수 없습니다")
+        return None
+    except Exception as e:
+        logger.error(f"VAPID 개인키 처리 실패: {e}")
+        return None
+
 VAPID_CLAIMS = {"sub": "mailto:dev@sousei-group.com"}
 subscriptions = []  # 실제 운영에서는 Supabase 같은 DB에 저장
 
@@ -278,6 +299,12 @@ async def send_push_notification_to_conversation(
             else:
                 title = f"{sender_name}님의 메시지"
             
+            # VAPID 개인키 가져오기
+            vapid_private_key = get_vapid_private_key()
+            if not vapid_private_key:
+                logger.error("VAPID 개인키를 가져올 수 없습니다")
+                return
+            
             # 푸시 알림 전송
             for member in members:
                 if exclude_user_id and member.user_id == exclude_user_id:
@@ -314,14 +341,13 @@ async def send_push_notification_to_conversation(
                         webpush(
                             subscription_info=subscription_info,
                             data=json.dumps(payload),
-                            vapid_private_key=VAPID_PRIVATE_KEY,
+                            vapid_private_key=vapid_private_key,
                             vapid_claims=VAPID_CLAIMS
                         )
                         
                     except WebPushException as ex:
                         logger.error(f"푸시 알림 전송 실패 (구독 ID: {subscription.id}): {ex}")
                         if ex.response and ex.response.status_code == 410:
-                            subscription.is_active = False
                             db.commit()
                             logger.info(f"만료된 구독 비활성화: {subscription.id}")
                     except Exception as e:
@@ -338,16 +364,22 @@ async def send_push(request: Request):
     body = await request.json()
     message = body.get("message", "새 메시지가 도착했습니다!")
 
+    # VAPID 개인키 가져오기
+    vapid_private_key = get_vapid_private_key()
+    if not vapid_private_key:
+        logger.error("VAPID 개인키를 가져올 수 없습니다")
+        return {"status": "error", "message": "VAPID 개인키를 가져올 수 없습니다"}
+
     for sub in subscriptions:
         try:
             webpush(
                 subscription_info=sub,
                 data='{"title":"알림","body":"' + message + '"}',
-                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_private_key=vapid_private_key,
                 vapid_claims=VAPID_CLAIMS
             )
         except WebPushException as ex:
-            print("푸시 전송 실패:", ex)
+            logger.error(f"푸시 전송 실패: {ex}")
 
     return {"status": "sent"}
 
