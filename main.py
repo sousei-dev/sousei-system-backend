@@ -293,8 +293,8 @@ async def send_push_notification_to_conversation(
                         subscription_info = {
                             "endpoint": subscription.endpoint,
                             "keys": {
-                                "p256dh": subscription.p256dh_key,
-                                "auth": subscription.auth_key
+                                "p256dh": subscription.p256dh,
+                                "auth": subscription.auth
                             }
                         }
                         
