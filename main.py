@@ -201,6 +201,26 @@ def get_vapid_private_key():
         logger.error(f"VAPID 개인키 처리 실패: {e}")
         return None
 
+# VAPID 클레임을 동적으로 생성하는 함수
+def get_vapid_claims(endpoint):
+    """엔드포인트에 따라 VAPID 클레임을 생성"""
+    from urllib.parse import urlparse
+    
+    try:
+        parsed_url = urlparse(endpoint)
+        aud = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        return {
+            "sub": "mailto:dev@sousei-group.com",
+            "aud": aud
+        }
+    except Exception as e:
+        logger.error(f"VAPID 클레임 생성 실패: {e}")
+        return {
+            "sub": "mailto:dev@sousei-group.com",
+            "aud": "https://fcm.googleapis.com"  # 기본값
+        }
+
 VAPID_CLAIMS = {"sub": "mailto:dev@sousei-group.com"}
 subscriptions = []  # 실제 운영에서는 Supabase 같은 DB에 저장
 
@@ -272,6 +292,12 @@ async def save_subscription(request: Request, db: Session = Depends(get_db)):
             detail="푸시 구독 저장에 실패했습니다"
         )
 
+# VAPID 공개키를 반환하는 엔드포인트 추가
+@app.get("/push/vapid-public-key")
+async def get_vapid_public_key():
+    """클라이언트가 구독할 때 사용할 VAPID 공개키를 반환"""
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
 async def send_push_notification_to_conversation(
     conversation_id: str, 
     sender_name: str, 
@@ -338,11 +364,14 @@ async def send_push_notification_to_conversation(
                             }
                         }
                         
+                        # webpush 호출 시 동적 클레임 사용
+                        vapid_claims = get_vapid_claims(subscription.endpoint)
+
                         webpush(
                             subscription_info=subscription_info,
                             data=json.dumps(payload),
                             vapid_private_key=vapid_private_key,
-                            vapid_claims=VAPID_CLAIMS
+                            vapid_claims=vapid_claims
                         )
                         
                     except WebPushException as ex:
