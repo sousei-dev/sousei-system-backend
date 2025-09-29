@@ -182,17 +182,19 @@ async def generate_company_invoice_pdf():
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "BDdBs4JFFA3CRGFaJ7qBSL1Kxur7E_ZEsYd7LOO0rYBIDXU1b5RvEwtRs48Jgb0Rx_J43Ow5ce8aPwovu5DEevY")
 VAPID_PRIVATE_KEY_PATH = os.getenv("VAPID_PRIVATE_KEY_PATH", "vapid_private_key.pem")
 
-# VAPID 키를 올바른 형식으로 변환하는 함수
+# VAPID 키를 올바른 형식으로 변환하는 함수 (디버깅 추가)
 def get_vapid_private_key():
     """VAPID 개인키를 pywebpush에서 사용할 수 있는 형식으로 변환"""
     try:
         # 파일 경로가 존재하는지 확인
         if os.path.exists(VAPID_PRIVATE_KEY_PATH):
+            logger.info(f"VAPID 개인키 파일 발견: {VAPID_PRIVATE_KEY_PATH}")
             return VAPID_PRIVATE_KEY_PATH
         
         # 환경변수에서 직접 가져온 개인키가 있다면 사용
         vapid_private_key = os.getenv("VAPID_PRIVATE_KEY")
         if vapid_private_key:
+            logger.info("환경변수에서 VAPID 개인키 사용")
             return vapid_private_key
             
         logger.error("VAPID 개인키를 찾을 수 없습니다")
@@ -201,7 +203,7 @@ def get_vapid_private_key():
         logger.error(f"VAPID 개인키 처리 실패: {e}")
         return None
 
-# VAPID 클레임을 동적으로 생성하는 함수
+# VAPID 클레임을 동적으로 생성하는 함수 (디버깅 추가)
 def get_vapid_claims(endpoint):
     """엔드포인트에 따라 VAPID 클레임을 생성"""
     from urllib.parse import urlparse
@@ -210,16 +212,21 @@ def get_vapid_claims(endpoint):
         parsed_url = urlparse(endpoint)
         aud = f"{parsed_url.scheme}://{parsed_url.netloc}"
         
-        return {
+        claims = {
             "sub": "mailto:dev@sousei-group.com",
             "aud": aud
         }
+        
+        logger.info(f"VAPID 클레임 생성: endpoint={endpoint}, claims={claims}")
+        return claims
     except Exception as e:
         logger.error(f"VAPID 클레임 생성 실패: {e}")
-        return {
+        default_claims = {
             "sub": "mailto:dev@sousei-group.com",
             "aud": "https://fcm.googleapis.com"  # 기본값
         }
+        logger.info(f"기본 VAPID 클레임 사용: {default_claims}")
+        return default_claims
 
 VAPID_CLAIMS = {"sub": "mailto:dev@sousei-group.com"}
 subscriptions = []  # 실제 운영에서는 Supabase 같은 DB에 저장
@@ -296,7 +303,48 @@ async def save_subscription(request: Request, db: Session = Depends(get_db)):
 @app.get("/push/vapid-public-key")
 async def get_vapid_public_key():
     """클라이언트가 구독할 때 사용할 VAPID 공개키를 반환"""
+    logger.info(f"VAPID 공개키 요청: {VAPID_PUBLIC_KEY}")
     return {"publicKey": VAPID_PUBLIC_KEY}
+
+# VAPID 디버깅 엔드포인트
+@app.get("/debug/vapid-info")
+async def debug_vapid_info():
+    """VAPID 키 정보를 디버깅용으로 반환"""
+    try:
+        # 개인키 파일 존재 여부 확인
+        private_key_path = get_vapid_private_key()
+        private_key_exists = os.path.exists(private_key_path) if private_key_path else False
+        
+        # 개인키 파일 내용 읽기 (처음 100자만)
+        private_key_preview = ""
+        if private_key_exists:
+            try:
+                with open(private_key_path, 'r') as f:
+                    private_key_preview = f.read()[:100] + "..."
+            except Exception as e:
+                private_key_preview = f"파일 읽기 오류: {e}"
+        
+        return {
+            "vapid_public_key": VAPID_PUBLIC_KEY,
+            "vapid_private_key_path": private_key_path,
+            "private_key_exists": private_key_exists,
+            "private_key_preview": private_key_preview,
+            "vapid_claims_default": VAPID_CLAIMS
+        }
+    except Exception as e:
+        return {"error": f"VAPID 정보 조회 실패: {e}"}
+
+@app.get("/debug/vapid-claims/{endpoint:path}")
+async def debug_vapid_claims(endpoint: str):
+    """특정 엔드포인트에 대한 VAPID 클레임을 디버깅용으로 반환"""
+    try:
+        claims = get_vapid_claims(endpoint)
+        return {
+            "endpoint": endpoint,
+            "generated_claims": claims
+        }
+    except Exception as e:
+        return {"error": f"VAPID 클레임 생성 실패: {e}"}
 
 async def send_push_notification_to_conversation(
     conversation_id: str, 
@@ -306,6 +354,8 @@ async def send_push_notification_to_conversation(
     exclude_user_id: Optional[str] = None
 ):
     """대화방의 모든 참여자에게 푸시 알림 전송"""
+    logger.info(f"푸시 알림 전송 시작: conversation_id={conversation_id}, sender={sender_name}")
+    
     try:
         db = SessionLocal()
         try:
@@ -314,6 +364,8 @@ async def send_push_notification_to_conversation(
             members = db.query(ConversationMember).filter(
                 ConversationMember.conversation_id == conversation_id
             ).all()
+            
+            logger.info(f"대화방 참여자 수: {len(members)}")
             
             # 메시지 본문이 너무 길면 잘라내기
             if len(message_body) > 100:
@@ -325,6 +377,8 @@ async def send_push_notification_to_conversation(
             else:
                 title = f"{sender_name}님의 메시지"
             
+            logger.info(f"푸시 제목: {title}, 본문: {message_body}")
+            
             # VAPID 개인키 가져오기
             vapid_private_key = get_vapid_private_key()
             if not vapid_private_key:
@@ -334,12 +388,15 @@ async def send_push_notification_to_conversation(
             # 푸시 알림 전송
             for member in members:
                 if exclude_user_id and member.user_id == exclude_user_id:
+                    logger.info(f"사용자 제외: {member.user_id}")
                     continue
                 
                 # 사용자의 활성 구독 조회
                 subscriptions = db.query(PushSubscription).filter(
                     PushSubscription.user_id == member.user_id
                 ).all()
+                
+                logger.info(f"사용자 {member.user_id}의 구독 수: {len(subscriptions)}")
                 
                 for subscription in subscriptions:
                     try:
@@ -350,6 +407,8 @@ async def send_push_notification_to_conversation(
                                 "auth": subscription.auth
                             }
                         }
+                        
+                        logger.info(f"구독 정보: endpoint={subscription.endpoint[:50]}..., p256dh={subscription.p256dh[:20]}..., auth={subscription.auth[:20]}...")
                         
                         payload = {
                             "title": title,
@@ -366,6 +425,7 @@ async def send_push_notification_to_conversation(
                         
                         # webpush 호출 시 동적 클레임 사용
                         vapid_claims = get_vapid_claims(subscription.endpoint)
+                        logger.info(f"사용할 VAPID 클레임: {vapid_claims}")
 
                         webpush(
                             subscription_info=subscription_info,
@@ -374,19 +434,26 @@ async def send_push_notification_to_conversation(
                             vapid_claims=vapid_claims
                         )
                         
+                        logger.info(f"푸시 알림 전송 성공: 구독 ID {subscription.id}")
+                        
                     except WebPushException as ex:
                         logger.error(f"푸시 알림 전송 실패 (구독 ID: {subscription.id}): {ex}")
+                        if ex.response:
+                            logger.error(f"응답 상태: {ex.response.status_code}")
+                            logger.error(f"응답 본문: {ex.response.text}")
                         if ex.response and ex.response.status_code == 410:
                             db.commit()
                             logger.info(f"만료된 구독 비활성화: {subscription.id}")
                     except Exception as e:
                         logger.error(f"푸시 알림 전송 중 오류: {e}")
+                        logger.error(f"오류 타입: {type(e).__name__}")
             
         finally:
             db.close()
             
     except Exception as e:
         logger.error(f"대화방 푸시 알림 전송 중 오류: {e}")
+        logger.error(f"오류 타입: {type(e).__name__}")
 
 @app.post("/push/send-push")
 async def send_push(request: Request):
