@@ -70,7 +70,7 @@ async def create_conversation(
             if existing_conversation:
                 # 기존 대화방 정보 반환
                 return {
-                    "message": "이미 존재하는 1:1 대화방입니다",
+                    "message": "既に存在する1:1会話です",
                     "id": str(existing_conversation.id),
                     "title": existing_conversation.title,
                     "is_group": existing_conversation.is_group,
@@ -89,7 +89,7 @@ async def create_conversation(
             if existing_group:
                 # 기존 그룹 채팅방 정보 반환
                 return {
-                    "message": "이미 존재하는 그룹 채팅방입니다",
+                    "message": "既に存在するグループ会話です",
                     "id": str(existing_group.id),
                     "title": existing_group.title,
                     "is_group": existing_group.is_group,
@@ -229,7 +229,7 @@ async def create_conversation(
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "대화가 성공적으로 생성되었습니다",
+            "message": "会話が正常に作成されました",
             "id": str(new_conversation.id),
             "title": new_conversation.title,
             "is_group": new_conversation.is_group,
@@ -240,7 +240,7 @@ async def create_conversation(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"대화 생성 중 오류가 발생했습니다: {str(e)}"
+            detail=f"会話の作成中にエラーが発生しました: {str(e)}"
         )
 
 @router.get("/conversations")
@@ -416,7 +416,7 @@ def get_conversations(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"대화 목록 조회 중 오류가 발생했습니다: {str(e)}"
+            detail=f"会話リストの取得中にエラーが発生しました: {str(e)}"
         )
 
 @router.get("/conversations/{conversation_id}")
@@ -439,7 +439,7 @@ def get_conversation(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화를 찾을 수 없거나 접근 권한이 없습니다"
+                detail="会話が見つからないか、アクセス権限がありません"
             )
         
         # 마지막 메시지 정보
@@ -506,7 +506,7 @@ def get_conversation(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"대화 정보 조회 중 오류가 발생했습니다: {str(e)}"
+            detail=f"会話情報の取得中にエラーが発生しました: {str(e)}"
         )
 
 @router.put("/conversations/{conversation_id}")
@@ -528,7 +528,7 @@ async def update_conversation(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화를 찾을 수 없거나 관리자 권한이 없습니다"
+                detail="会話が見つからないか、管理者権限がありません"
             )
         
         # 기존 값 저장 (로그용)
@@ -581,7 +581,7 @@ async def update_conversation(
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "대화 정보가 성공적으로 업데이트되었습니다",
+            "message": "会話情報が正常に更新されました",
             "conversation_id": str(conversation.id),
             "title": conversation.title,
             "is_group": conversation.is_group
@@ -593,7 +593,7 @@ async def update_conversation(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"대화 정보 업데이트 중 오류가 발생했습니다: {str(e)}"
+            detail=f"会話情報の更新中にエラーが発生しました: {str(e)}"
         )
 
 # ===== 메시지 관련 API =====
@@ -619,7 +619,7 @@ async def create_message(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화방을 찾을 수 없거나 접근 권한이 없습니다"
+                detail="会話が見つからないか、アクセス権限がありません"
             )
         
 
@@ -632,7 +632,7 @@ async def create_message(
         if body_is_empty and attachments_is_empty:
             raise HTTPException(
                 status_code=400,
-                detail="메시지 본문이나 첨부파일 중 하나는 있어야 합니다"
+                detail="メッセージ本文または添付ファイルのいずれかが必要です"
             )
         
         # 메시지 생성 (body가 공백만 있는 경우 None으로 설정)
@@ -668,7 +668,7 @@ async def create_message(
                     if file_extension not in supported_extensions:
                         raise HTTPException(
                             status_code=400,
-                            detail=f"지원하지 않는 파일 형식입니다: {file_extension}. 지원되는 형식: {', '.join(supported_extensions)}"
+                            detail=f"サポートされていないファイル形式です: {file_extension}. サポートされる形式: {', '.join(supported_extensions)}"
                         )
                     
                     # 파일 크기 확인 (50MB 제한)
@@ -679,7 +679,7 @@ async def create_message(
                     if file_size > 50 * 1024 * 1024:  # 50MB
                         raise HTTPException(
                             status_code=400,
-                            detail="파일 크기는 50MB를 초과할 수 없습니다"
+                            detail="ファイルサイズは50MBを超えることはできません"
                         )
                     
                     # Supabase Storage에 파일 업로드
@@ -715,19 +715,19 @@ async def create_message(
                         else:
                             raise HTTPException(
                                 status_code=500,
-                                detail="파일 업로드에 실패했습니다"
+                                detail="ファイルのアップロードに失敗しました"
                             )
                     else:
                         raise HTTPException(
                             status_code=500,
-                            detail="Supabase 설정이 되어 있지 않습니다"
+                            detail="Supabase設定がされていません"
                         )
                         
                 except Exception as upload_error:
                     logger.error(f"파일 업로드 실패: {upload_error}")
                     raise HTTPException(
                         status_code=500,
-                        detail=f"파일 업로드 중 오류가 발생했습니다: {str(upload_error)}"
+                        detail=f"ファイルアップロード中にエラーが発生しました: {str(upload_error)}"
                     )
         
         # 다른 멤버들의 last_read_at 업데이트 (읽지 않은 상태로)
@@ -1035,7 +1035,7 @@ async def create_message(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"메시지 전송 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メッセージの送信中にエラーが発生しました: {str(e)}"
         )
 
 @router.get("/conversations/{conversation_id}/messages")
@@ -1057,7 +1057,7 @@ def get_messages(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화를 찾을 수 없거나 접근 권한이 없습니다"
+                detail="会話が見つからないか、アクセス権限がありません"
             )
         
         # 메시지 조회 (최신 메시지부터)
@@ -1255,7 +1255,7 @@ def get_messages(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"메시지 목록 조회 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メッセージリストの取得中にエラーが発生しました: {str(e)}"
         )
 
 @router.put("/messages/{message_id}")
@@ -1277,7 +1277,7 @@ async def update_message(
         if not message:
             raise HTTPException(
                 status_code=404,
-                detail="메시지를 찾을 수 없거나 수정 권한이 없습니다"
+                detail="メッセージが見つからないか、編集権限がありません"
             )
         
         # 기존 값 저장 (로그용)
@@ -1391,7 +1391,7 @@ async def update_message(
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "메시지가 성공적으로 수정되었습니다",
+            "message": "メッセージが正常に編集されました",
             "message_id": str(message.id),
             "body": message.body,
             "edited_at": message.edited_at
@@ -1403,7 +1403,7 @@ async def update_message(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"메시지 수정 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メッセージの編集中にエラーが発生しました: {str(e)}"
         )
 
 @router.delete("/messages/{message_id}")
@@ -1424,7 +1424,7 @@ async def delete_message(
         if not message:
             raise HTTPException(
                 status_code=404,
-                detail="메시지를 찾을 수 없거나 삭제 권한이 없습니다"
+                detail="メッセージが見つからないか、削除権限がありません"
             )
         
         # 소프트 삭제 (deleted_at 설정)
@@ -1528,7 +1528,7 @@ async def delete_message(
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "메시지가 성공적으로 삭제되었습니다",
+            "message": "メッセージが正常に削除されました",
             "message_id": str(message.id)
         }
         
@@ -1538,7 +1538,7 @@ async def delete_message(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"메시지 삭제 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メッセージの削除中にエラーが発生しました: {str(e)}"
         )
 
 # ===== 메시지 읽음 처리 API =====
@@ -1561,7 +1561,7 @@ async def mark_message_as_read(
         if not message:
             raise HTTPException(
                 status_code=404,
-                detail="메시지를 찾을 수 없거나 접근 권한이 없습니다"
+                detail="メッセージが見つからないか、アクセス権限がありません"
             )
         
         # 이미 읽음 처리되었는지 확인
@@ -1572,7 +1572,7 @@ async def mark_message_as_read(
         
         if existing_read:
             return {
-                "message": "이미 읽음 처리된 메시지입니다",
+                "message": "既に既読処理されたメッセージです",
                 "message_id": str(message_id),
                 "read_at": existing_read.read_at
             }
@@ -1681,7 +1681,7 @@ async def mark_message_as_read(
             logger.warning(f"WebSocket 읽음 상태 알림 실패: {ws_error}")
         
         return {
-            "message": "메시지가 성공적으로 읽음 처리되었습니다",
+            "message": "メッセージが正常に既読処理されました",
             "message_id": str(message_id),
             "read_at": new_read.read_at,
             "websocket_sent": True
@@ -1693,7 +1693,7 @@ async def mark_message_as_read(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"메시지 읽음 처리 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メッセージの既読処理中にエラーが発生しました: {str(e)}"
         )
 
 @router.post("/conversations/{conversation_id}/read-all")
@@ -1713,7 +1713,7 @@ async def mark_conversation_as_read(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화방을 찾을 수 없거나 접근 권한이 없습니다"
+                detail="会話が見つからないか、アクセス権限がありません"
             )
         
         # 읽지 않은 메시지들 조회
@@ -1725,7 +1725,7 @@ async def mark_conversation_as_read(
         
         if not unread_messages:
             return {
-                "message": "읽지 않은 메시지가 없습니다",
+                "message": "未読メッセージがありません",
                 "conversation_id": str(conversation_id),
                 "read_count": 0
             }
@@ -1845,14 +1845,14 @@ async def mark_conversation_as_read(
                 logger.warning(f"WebSocket 읽음 상태 알림 실패: {ws_error}")
             
             return {
-                "message": f"대화방의 {len(read_records)}개 메시지가 성공적으로 읽음 처리되었습니다",
+                "message": f"会話の{len(read_records)}件のメッセージが正常に既読処理されました",
                 "conversation_id": str(conversation_id),
                 "read_count": len(read_records),
                 "websocket_sent": True
             }
         else:
             return {
-                "message": "읽음 처리할 메시지가 없습니다",
+                "message": "既読処理するメッセージがありません",
                 "conversation_id": str(conversation_id),
                 "read_count": 0
             }
@@ -1863,7 +1863,7 @@ async def mark_conversation_as_read(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"대화방 읽음 처리 중 오류가 발생했습니다: {str(e)}"
+            detail=f"会話の既読処理中にエラーが発生しました: {str(e)}"
         )
 
 # ===== 이모지 반응 API =====
@@ -1886,7 +1886,7 @@ def add_reaction(
         if not message:
             raise HTTPException(
                 status_code=404,
-                detail="메시지를 찾을 수 없습니다"
+                detail="メッセージが見つかりません"
             )
         
         # 이미 같은 이모지 반응이 있는지 확인
@@ -1899,7 +1899,7 @@ def add_reaction(
         if existing_reaction:
             raise HTTPException(
                 status_code=400,
-                detail="이미 같은 이모지 반응을 추가했습니다"
+                detail="既に同じ絵文字リアクションを追加しています"
             )
         
         # 새 반응 추가
@@ -1912,7 +1912,7 @@ def add_reaction(
         db.commit()
         
         return {
-            "message": "이모지 반응이 추가되었습니다",
+            "message": "絵文字リアクションが追加されました",
             "message_id": str(message_id),
             "emoji": reaction.emoji,
             "user_id": current_user["id"]
@@ -1924,7 +1924,7 @@ def add_reaction(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"이모지 반응 추가 중 오류가 발생했습니다: {str(e)}"
+            detail=f"絵文字リアクションの追加中にエラーが発生しました: {str(e)}"
         )
 
 @router.delete("/messages/{message_id}/reactions/{emoji}")
@@ -1946,7 +1946,7 @@ def remove_reaction(
         if not reaction:
             raise HTTPException(
                 status_code=404,
-                detail="해당 이모지 반응을 찾을 수 없습니다"
+                detail="該当の絵文字リアクションが見つかりません"
             )
         
         # 반응 제거
@@ -1954,7 +1954,7 @@ def remove_reaction(
         db.commit()
         
         return {
-            "message": "이모지 반응이 제거되었습니다",
+            "message": "絵文字リアクションが削除されました",
             "message_id": str(message_id),
             "emoji": emoji
         }
@@ -1965,7 +1965,7 @@ def remove_reaction(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"이모지 반응 제거 중 오류가 발생했습니다: {str(e)}"
+            detail=f"絵文字リアクションの削除中にエラーが発生しました: {str(e)}"
         )
 
 # ===== 대화방 멤버 관리 API =====
@@ -1987,7 +1987,7 @@ async def get_conversation_members(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화방을 찾을 수 없거나 접근 권한이 없습니다"
+                detail="会話が見つからないか、アクセス権限がありません"
             )
         
         # 대화방 멤버 조회
@@ -2027,7 +2027,7 @@ async def get_conversation_members(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"대화방 멤버 정보 조회 중 오류가 발생했습니다: {str(e)}"
+            detail=f"会話メンバー情報の取得中にエラーが発生しました: {str(e)}"
         )
 
 @router.post("/conversations/{conversation_id}/members")
@@ -2049,7 +2049,7 @@ async def add_conversation_member(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화방을 찾을 수 없거나 관리자 권한이 없습니다"
+                detail="会話が見つからないか、管理者権限がありません"
             )
         
         # 이미 멤버인지 확인
@@ -2061,7 +2061,7 @@ async def add_conversation_member(
         if existing_member:
             raise HTTPException(
                 status_code=400,
-                detail="이미 대화방에 참여 중인 사용자입니다"
+                detail="既に会話に参加しているユーザーです"
             )
         
         # 새 멤버 추가
@@ -2104,7 +2104,7 @@ async def add_conversation_member(
             logger.error(f"WebSocket 알림 전송 실패: {ws_error}")
         
         return {
-            "message": "새 멤버가 대화방에 추가되었습니다",
+            "message": "新しいメンバーが会話に追加されました",
             "conversation_id": conversation_id,
             "user_id": member_data.user_id,
             "role": member_data.role
@@ -2116,7 +2116,7 @@ async def add_conversation_member(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"멤버 추가 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メンバーの追加中にエラーが発生しました: {str(e)}"
         )
 
 @router.delete("/conversations/{conversation_id}/members/{user_id}")
@@ -2137,7 +2137,7 @@ async def remove_conversation_member(
         if not conversation:
             raise HTTPException(
                 status_code=404,
-                detail="대화방을 찾을 수 없거나 접근 권한이 없습니다"
+                detail="会話が見つからないか、アクセス権限がありません"
             )
         
         # 제거할 멤버 확인
@@ -2149,7 +2149,7 @@ async def remove_conversation_member(
         if not target_member:
             raise HTTPException(
                 status_code=404,
-                detail="제거할 멤버를 찾을 수 없습니다"
+                detail="削除するメンバーが見つかりません"
             )
         
         # 자신을 제거하거나 관리자가 다른 사용자를 제거하는 경우만 허용
@@ -2162,7 +2162,7 @@ async def remove_conversation_member(
             if not current_member or current_member.role != "admin":
                 raise HTTPException(
                     status_code=403,
-                    detail="멤버를 제거할 권한이 없습니다"
+                    detail="メンバーを削除する権限がありません"
                 )
         
         # 멤버 제거
@@ -2198,7 +2198,7 @@ async def remove_conversation_member(
             logger.error(f"WebSocket 알림 전송 실패: {ws_error}")
         
         return {
-            "message": "멤버가 대화방에서 제거되었습니다",
+            "message": "メンバーが会話から削除されました",
             "conversation_id": conversation_id,
             "user_id": user_id
         }
@@ -2209,7 +2209,169 @@ async def remove_conversation_member(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"멤버 제거 중 오류가 발생했습니다: {str(e)}"
+            detail=f"メンバーの削除中にエラーが発生しました: {str(e)}"
+        )
+
+@router.post("/conversations/{conversation_id}/invite")
+async def invite_members_to_conversation(
+    conversation_id: str,
+    request_data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """대화방에 여러 멤버를 한 번에 초대"""
+    try:
+        member_ids = request_data.get("member_ids", [])
+        
+        if not member_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="招待するメンバーIDリストが必要です"
+            )
+        
+        # 대화방 존재 여부 및 권한 확인 (참여자면 초대 가능)
+        conversation = db.query(Conversation).join(ConversationMember).filter(
+            Conversation.id == conversation_id,
+            ConversationMember.user_id == current_user["id"]
+        ).first()
+        
+        if not conversation:
+            raise HTTPException(
+                status_code=404,
+                detail="会話が見つからないか、アクセス権限がありません"
+            )
+        
+        # 그룹 채팅이 아니면 초대 불가
+        if not conversation.is_group:
+            raise HTTPException(
+                status_code=400,
+                detail="1:1会話にはメンバーを招待できません"
+            )
+        
+        added_members = []
+        already_members = []
+        failed_members = []
+        
+        for user_id in member_ids:
+            try:
+                # 이미 멤버인지 확인
+                existing_member = db.query(ConversationMember).filter(
+                    ConversationMember.conversation_id == conversation_id,
+                    ConversationMember.user_id == user_id
+                ).first()
+                
+                if existing_member:
+                    already_members.append(user_id)
+                    continue
+                
+                # 새 멤버 추가
+                new_member = ConversationMember(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    role="member"
+                )
+                db.add(new_member)
+                added_members.append(user_id)
+                
+            except Exception as member_error:
+                logger.error(f"멤버 {user_id} 추가 실패: {member_error}")
+                failed_members.append(user_id)
+        
+        db.commit()
+        
+        # WebSocket을 통해 멤버 추가 알림
+        if added_members:
+            try:
+                # 새로 추가된 멤버들의 프로필 정보 조회
+                invited_members_info = []
+                if supabase:
+                    try:
+                        profile_result = supabase.table('profiles').select('*').in_('id', added_members).execute()
+                        if profile_result.data:
+                            for profile in profile_result.data:
+                                invited_members_info.append({
+                                    "id": profile['id'],
+                                    "name": profile.get('name', '사용자'),
+                                    "avatar": profile.get('avatar', ''),
+                                    "role": "member"
+                                })
+                    except Exception as profile_error:
+                        logger.warning(f"초대된 멤버 프로필 조회 실패: {profile_error}")
+                
+                # 기존 멤버들에게 새 멤버 추가 알림
+                websocket_message = {
+                    "type": "members_invited",
+                    "conversation_id": conversation_id,
+                    "invited_by": current_user["id"],
+                    "invited_members": invited_members_info,
+                    "member_ids": added_members,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                await manager.send_to_conversation(
+                    websocket_message, 
+                    conversation_id
+                )
+                
+                # 새로 추가된 멤버들에게도 대화방 정보 전송
+                conversation_data = {
+                    "id": str(conversation.id),
+                    "title": conversation.title,
+                    "is_group": conversation.is_group,
+                    "created_by": str(conversation.created_by),
+                    "created_at": conversation.created_at.isoformat()
+                }
+                
+                for user_id in added_members:
+                    await manager.send_personal_message({
+                        "type": "conversation_invited",
+                        "conversation": conversation_data,
+                        "invited_by": current_user["id"],
+                        "timestamp": datetime.utcnow().isoformat()
+                    }, user_id)
+                
+                logger.info(f"멤버 초대 알림 전송 완료: {len(added_members)}명")
+                
+            except Exception as ws_error:
+                logger.error(f"WebSocket 초대 알림 전송 실패: {ws_error}")
+        
+        # 데이터베이스 로그 생성
+        if added_members:
+            try:
+                create_database_log(
+                    db=db,
+                    table_name="conversation_members",
+                    record_id=f"{conversation_id}_invite_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                    action="INSERT",
+                    user_id=current_user["id"],
+                    new_values={
+                        "conversation_id": conversation_id,
+                        "invited_members": added_members,
+                        "count": len(added_members)
+                    },
+                    changed_fields=["conversation_id", "invited_members"],
+                    note=f"会話メンバー招待 - {len(added_members)}名招待"
+                )
+            except Exception as log_error:
+                logger.error(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": f"{len(added_members)}名のメンバーが正常に招待されました",
+            "conversation_id": conversation_id,
+            "added_members": added_members,
+            "already_members": already_members,
+            "failed_members": failed_members,
+            "total_added": len(added_members),
+            "total_failed": len(failed_members)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"メンバーの招待中にエラーが発生しました: {str(e)}"
         )
 
 # ===== 전체 사용자 관리 API =====
@@ -2227,7 +2389,7 @@ async def get_all_users(
         if not supabase:
             raise HTTPException(
                 status_code=500,
-                detail="Supabase 클라이언트가 초기화되지 않았습니다"
+                detail="Supabaseクライアントが初期化されていません"
             )
         
         # Supabase에서 사용자 정보 조회 (본인 제외)
@@ -2309,7 +2471,7 @@ async def get_all_users(
         logger.error(f"사용자 목록 조회 중 오류: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"사용자 목록 조회 중 오류가 발생했습니다: {str(e)}"
+            detail=f"ユーザーリストの取得中にエラーが発生しました: {str(e)}"
         )
 
 @router.get("/users/online-status")
@@ -2323,7 +2485,7 @@ async def get_users_online_status(
         if not supabase:
             raise HTTPException(
                 status_code=500,
-                detail="Supabase 클라이언트가 초기화되지 않았습니다"
+                detail="Supabaseクライアントが初期化されていません"
             )
         
         # Supabase profiles 테이블에서 사용자 목록 조회 (본인 제외)
@@ -2375,5 +2537,163 @@ async def get_users_online_status(
         logger.error(f"사용자 온라인 상태 조회 중 오류: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"사용자 온라인 상태 조회 중 오류가 발생했습니다: {str(e)}"
+            detail=f"ユーザーのオンライン状態の取得中にエラーが発生しました: {str(e)}"
+        )
+
+@router.post("/conversations/{conversation_id}/leave")
+async def leave_conversation(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """대화방 나가기 (자신을 대화방에서 제거)"""
+    try:
+        # 대화방 존재 여부 및 참여 확인
+        conversation = db.query(Conversation).join(ConversationMember).filter(
+            Conversation.id == conversation_id,
+            ConversationMember.user_id == current_user["id"]
+        ).first()
+        
+        if not conversation:
+            raise HTTPException(
+                status_code=404,
+                detail="会話が見つからないか、アクセス権限がありません"
+            )
+        
+        # 자신의 멤버십 확인
+        member = db.query(ConversationMember).filter(
+            ConversationMember.conversation_id == conversation_id,
+            ConversationMember.user_id == current_user["id"]
+        ).first()
+        
+        if not member:
+            raise HTTPException(
+                status_code=404,
+                detail="会話に参加していません"
+            )
+        
+        # 그룹 채팅이 아니면 나가기 불가
+        if not conversation.is_group:
+            raise HTTPException(
+                status_code=400,
+                detail="1:1会話から退出することはできません"
+            )
+        
+        # 멤버 제거
+        db.delete(member)
+        
+        # 대화방의 남은 멤버 수 확인
+        remaining_members_count = db.query(ConversationMember).filter(
+            ConversationMember.conversation_id == conversation_id
+        ).count()
+        
+        # 남은 멤버가 없으면 대화방도 삭제 (선택사항)
+        # if remaining_members_count == 0:
+        #     db.delete(conversation)
+        #     logger.info(f"빈 대화방 삭제: {conversation_id}")
+        
+        db.commit()
+        
+        # WebSocket을 통해 나가기 알림
+        try:
+            # 나간 사용자 프로필 정보 조회
+            leaver_info = None
+            if supabase:
+                try:
+                    profile_result = supabase.table('profiles').select('*').eq('id', current_user["id"]).execute()
+                    if profile_result.data:
+                        profile = profile_result.data[0]
+                        leaver_info = {
+                            "id": current_user["id"],
+                            "name": profile.get('name', 'ユーザー'),
+                            "avatar": profile.get('avatar', '')
+                        }
+                except Exception as profile_error:
+                    logger.warning(f"나간 사용자 프로필 조회 실패: {profile_error}")
+            
+            if not leaver_info:
+                leaver_info = {
+                    "id": current_user["id"],
+                    "name": "ユーザー",
+                    "avatar": ""
+                }
+            
+            # 남은 멤버들에게 나가기 알림
+            websocket_message = {
+                "type": "member_left",
+                "conversation_id": conversation_id,
+                "user_id": current_user["id"],
+                "user_info": leaver_info,
+                "remaining_members_count": remaining_members_count,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            await manager.send_to_conversation(
+                websocket_message, 
+                conversation_id,
+                exclude_user=current_user["id"]
+            )
+            
+            # 나간 사용자에게도 확인 메시지
+            await manager.send_personal_message({
+                "type": "conversation_left",
+                "conversation_id": conversation_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }, current_user["id"])
+            
+            # 채팅 리스트 업데이트 전송
+            chat_list_update_data = {
+                "member_left": {
+                    "user_id": current_user["id"],
+                    "user_info": leaver_info,
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                "conversation_id": conversation_id,
+                "remaining_members_count": remaining_members_count
+            }
+            
+            await manager.send_chat_list_update(
+                conversation_id,
+                "member_left",
+                chat_list_update_data
+            )
+            
+            logger.info(f"대화방 나가기 알림 전송 완료: {conversation_id}")
+            
+        except Exception as ws_error:
+            logger.error(f"WebSocket 나가기 알림 전송 실패: {ws_error}")
+        
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="conversation_members",
+                record_id=f"{conversation_id}_{current_user['id']}",
+                action="DELETE",
+                user_id=current_user["id"],
+                old_values={
+                    "conversation_id": conversation_id,
+                    "user_id": current_user["id"],
+                    "role": member.role
+                },
+                new_values={},
+                changed_fields=["deleted"],
+                note=f"会話退出 - {conversation.title or '無題'}"
+            )
+        except Exception as log_error:
+            logger.error(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": "会話から正常に退出しました",
+            "conversation_id": conversation_id,
+            "remaining_members_count": remaining_members_count
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"会話からの退出中にエラーが発生しました: {str(e)}"
         )

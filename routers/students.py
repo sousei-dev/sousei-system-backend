@@ -225,7 +225,7 @@ def get_students_expiring_soon(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """재류기간 만료가 임박한 학생들을 조회 (기본값: 4개월 전부터) - 만료된 학생도 포함"""
+    """재류기간 만료가 임박한 학생들 + 재류카드 번호가 없는 학생들 조회"""
     try:
         # 현재 날짜
         current_date = datetime.now().date()
@@ -233,22 +233,45 @@ def get_students_expiring_soon(
         # 만료 예정 날짜 계산 (현재 날짜 + 지정된 개월 수)
         target_date = current_date + timedelta(days=months_ahead * 30)  # 대략적인 계산
         
-        # 재류기간 만료가 임박한 학생들 조회 (만료된 학생도 포함, 퇴직자 제외)
+        # 재류기간 만료가 임박한 학생들 + 재류카드 번호가 없는 학생들 조회 (퇴직자 제외)
         query = db.query(Student).options(
             joinedload(Student.grade)
         ).filter(
-            Student.residence_card_expiry.isnot(None),  # 재류기간 만료일이 있는 학생만
-            Student.residence_card_expiry <= target_date,  # 만료 예정일 이내 (만료된 학생 포함)
-            Student.status != "RESIGNED"  # 퇴직자가 아닌 학생만
-        ).order_by(Student.residence_card_expiry.asc())  # 만료일이 빠른 순으로 정렬
+            Student.status != "RESIGNED",  # 퇴직자가 아닌 학생만
+            or_(
+                # 조건 1: 재류기간 만료가 임박한 학생들 (만료된 학생도 포함)
+                and_(
+                    Student.residence_card_expiry.isnot(None),
+                    Student.residence_card_expiry <= target_date
+                ),
+                # 조건 2: 재류카드 번호가 없는 학생들
+                or_(
+                    Student.residence_card_number.is_(None),
+                    Student.residence_card_number == ""
+                )
+            )
+        )
         
         if student_type:
             query = query.filter(Student.student_type == student_type)
+        
         # 전체 항목 수 계산
         total_count = query.count()
         
-        # 페이지네이션 적용
-        students = query.offset((page - 1) * page_size).limit(page_size).all()
+        # 위험도 순으로 정렬: 만료일이 있는 경우 만료일 순, 없는 경우 마지막에
+        # CASE 표현식을 사용하여 정렬
+        from sqlalchemy import case
+        
+        # 정렬 우선순위:
+        # 1순위: residence_card_expiry가 있고 값이 작은 순 (만료된/임박한 것 먼저)
+        # 2순위: residence_card_number가 없는 경우
+        students = query.order_by(
+            case(
+                (Student.residence_card_expiry.isnot(None), Student.residence_card_expiry),
+                else_=date(2099, 12, 31)  # 만료일이 없으면 맨 뒤로
+            ).asc(),
+            Student.name.asc()  # 이름순 정렬
+        ).offset((page - 1) * page_size).limit(page_size).all()
         
         # 전체 페이지 수 계산
         total_pages = (total_count + page_size - 1) // page_size
@@ -256,21 +279,36 @@ def get_students_expiring_soon(
         # 응답 데이터 준비
         result = []
         for student in students:
-            # 만료까지 남은 일수 계산
-            days_until_expiry = (student.residence_card_expiry - current_date).days
-            
-            student_data = {
-                "id": str(student.id),
-                "name": student.name,
-                "email": student.email if student.email else "",
-                "phone": student.phone,
-                "nationality": student.nationality,
-                "residence_card_number": student.residence_card_number,
-                "residence_card_start": student.residence_card_start,
-                "residence_card_expiry": student.residence_card_expiry,
-                "days_until_expiry": days_until_expiry,
-                "expiry_status": "満了" if days_until_expiry <= 0 else f"{days_until_expiry}日 残り",
-            }
+            # 재류카드 번호가 없는 경우
+            if not student.residence_card_number:
+                student_data = {
+                    "id": str(student.id),
+                    "name": student.name,
+                    "email": student.email if student.email else "",
+                    "phone": student.phone,
+                    "nationality": student.nationality,
+                    "residence_card_number": None,
+                    "residence_card_start": None,
+                    "residence_card_expiry": None,
+                    "days_until_expiry": None,
+                    "expiry_status": "在留カード番号未登録",
+                }
+            else:
+                # 만료까지 남은 일수 계산
+                days_until_expiry = (student.residence_card_expiry - current_date).days if student.residence_card_expiry else None
+                
+                student_data = {
+                    "id": str(student.id),
+                    "name": student.name,
+                    "email": student.email if student.email else "",
+                    "phone": student.phone,
+                    "nationality": student.nationality,
+                    "residence_card_number": student.residence_card_number,
+                    "residence_card_start": student.residence_card_start,
+                    "residence_card_expiry": student.residence_card_expiry,
+                    "days_until_expiry": days_until_expiry,
+                    "expiry_status": "満了" if days_until_expiry is not None and days_until_expiry <= 0 else f"{days_until_expiry}日 残り" if days_until_expiry is not None else "期限未登録",
+                }
             result.append(student_data)
         
         return {
