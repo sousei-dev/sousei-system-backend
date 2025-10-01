@@ -446,6 +446,8 @@ async def send_push_notification_to_conversation(
 ):
     """대화방의 모든 참여자에게 푸시 알림 전송"""
     logger.info(f"푸시 알림 전송 시작: conversation_id={conversation_id}, sender={sender_name}")
+    logger.info(f"[DEBUG] 현재 온라인 사용자: {list(ws_manager.active_connections.keys())}")
+    logger.info(f"[DEBUG] 전체 온라인 사용자 수: {ws_manager.get_online_users_count()}")
     
     try:
         db = SessionLocal()
