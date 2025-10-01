@@ -482,7 +482,16 @@ async def send_push_notification_to_conversation(
                     logger.info(f"사용자 제외: {member.user_id}")
                     continue
               
-                is_online = ws_manager.get_connection_status(member.user_id)
+                 # 사용자가 현재 WebSocket에 연결되어 있는지 확인
+                # 1. 전역 연결 확인
+                is_globally_online = ws_manager.get_connection_status(member.user_id)
+                # 2. 해당 채팅방에 연결되어 있는지 확인
+                is_in_room = ws_manager.get_room_connection_status(member.user_id, conversation_id)
+                # 둘 중 하나라도 연결되어 있으면 온라인으로 간주
+                is_online = is_globally_online or is_in_room
+                
+                logger.info(f"[PUSH DEBUG] user_id={member.user_id}, 전역연결={is_globally_online}, 채팅방연결={is_in_room}, 온라인={is_online}")
+                
                 if is_online:
                     logger.info(f"사용자 {member.user_id}가 온라인 상태(WebSocket 연결)이므로 푸시 알림 건너뜀")
                     continue
