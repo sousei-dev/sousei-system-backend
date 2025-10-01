@@ -501,16 +501,12 @@ async def send_push_notification_to_conversation(
                         logger.info(f"구독 정보: endpoint={subscription.endpoint[:50]}..., p256dh={subscription.p256dh[:20]}..., auth={subscription.auth[:20]}...")
                         
                         payload = {
-                            "notification": {
-                                "title": title,
-                                "body": message_body,
-                                "data": {
-                                    "type": "chat_message",
-                                    "conversation_id": conversation_id,
-                                    "sender_name": sender_name,
-                                    "url": f"/chat/{conversation_id}"
-                                }
-                            },
+                            "title": title,
+                            "body": message_body,
+                            "icon": "/icon-192x192.png",
+                            "badge": "/badge-72x72.png",
+                            "tag": f"chat-{conversation_id}",
+                            "requireInteraction": False,
                             "data": {
                                 "type": "chat_message",
                                 "conversation_id": conversation_id,
