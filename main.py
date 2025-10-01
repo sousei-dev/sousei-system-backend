@@ -485,10 +485,11 @@ async def send_push_notification_to_conversation(
                     continue
               
                  # 사용자가 현재 WebSocket에 연결되어 있는지 확인
+                user_id_str = str(member.user_id)
                 # 1. 전역 연결 확인
-                is_globally_online = ws_manager.get_connection_status(member.user_id)
+                is_globally_online = ws_manager.get_connection_status(user_id_str)
                 # 2. 해당 채팅방에 연결되어 있는지 확인
-                is_in_room = ws_manager.get_room_connection_status(member.user_id, conversation_id)
+                is_in_room = ws_manager.get_room_connection_status(user_id_str, conversation_id)
                 # 둘 중 하나라도 연결되어 있으면 온라인으로 간주
                 is_online = is_globally_online or is_in_room
                 
