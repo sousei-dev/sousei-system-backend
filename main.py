@@ -16,6 +16,7 @@ from pywebpush import webpush, WebPushException
 from models import PushSubscription  # PushSubscription 모델 import 추가
 from datetime import datetime  # datetime import 추가
 import json
+from utils.websocket_manager import manager as ws_manager
 
 # .env 파일 로드
 load_dotenv()
@@ -480,6 +481,13 @@ async def send_push_notification_to_conversation(
                 if exclude_user_id and member.user_id == exclude_user_id:
                     logger.info(f"사용자 제외: {member.user_id}")
                     continue
+              
+                is_online = ws_manager.get_connection_status(member.user_id)
+                if is_online:
+                    logger.info(f"사용자 {member.user_id}가 온라인 상태(WebSocket 연결)이므로 푸시 알림 건너뜀")
+                    continue
+                
+                logger.info(f"사용자 {member.user_id}가 오프라인 상태 - 푸시 알림 전송")
                 
                 # 사용자의 활성 구독 조회
                 subscriptions = db.query(PushSubscription).filter(
