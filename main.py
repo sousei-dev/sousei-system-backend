@@ -614,6 +614,34 @@ async def send_push(request: Request):
 
     return {"status": "sent"}
 
+@app.get("/debug/websocket-status/{user_id}")
+async def debug_websocket_status(user_id: str):
+    """특정 사용자의 WebSocket 연결 상태 확인"""
+    is_online = ws_manager.get_connection_status(user_id)
+    connected_rooms = ws_manager.get_user_room_status(user_id)
+    all_conversations = ws_manager.get_user_conversations(user_id)
+    
+    return {
+        "user_id": user_id,
+        "is_online": is_online,
+        "connected_rooms": list(connected_rooms),
+        "all_conversations": list(all_conversations),
+        "total_online_users": ws_manager.get_online_users_count()
+    }
+
+@app.get("/debug/websocket-all")
+async def debug_websocket_all():
+    """모든 WebSocket 연결 상태 확인"""
+    return {
+        "total_online_users": ws_manager.get_online_users_count(),
+        "online_user_ids": list(ws_manager.active_connections.keys()),
+        "active_conversations": list(ws_manager.conversation_members.keys()),
+        "room_connections": {
+            conv_id: list(users.keys()) 
+            for conv_id, users in ws_manager.room_connections.items()
+        }
+    }
+
 # 기타 필요한 엔드포인트들...
 # (필요에 따라 추가)
 
