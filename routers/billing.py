@@ -5,7 +5,7 @@ from typing import Optional, List
 from database import SessionLocal, engine
 from models import (
     BillingInvoice, BillingInvoiceItem, BillingMonthlyItem,
-    Student, Company, Room, Building, Grade
+    Student, Company, Room, Building, Grade, Department
 )
 from schemas import (
     InvoiceCreate, InvoiceItemCreate, BillingInvoiceCreate, BillingInvoiceResponse,
@@ -143,18 +143,26 @@ def get_invoices(
 
 @router.post("/billing-invoices/generate/excel")
 def generate_company_invoice_excel(
-    company_id: str,
+    department_id: str,
     year: int,
     month: int,
     student_type: Optional[str] = Query(None, description="학생 타입으로 필터링"),
     db: Session = Depends(get_db)
 ):
-    """회사별 청구서 상세 데이터를 엑셀 파일로 다운로드"""
+    """회사별 청구서 상세 데이터를 엑셀 파일로 다운로드 (부서 ID 기반)"""
     try:
-        # 회사 존재 여부 확인
-        company = db.query(Company).filter(Company.id == company_id).first()
+        # 부서 존재 여부 확인 및 회사 정보 가져오기
+        department = db.query(Department).filter(Department.id == department_id).first()
+        if not department:
+            raise HTTPException(status_code=404, detail="部署が見つかりません。")
+        
+        # 부서에서 회사 정보 가져오기
+        company = department.company
         if not company:
             raise HTTPException(status_code=404, detail="会社が見つかりません。")
+        
+        print(f"company: {company.id}")
+        company_id = str(company.id)
         
         # 해당 회사의 학생들 조회 (학생 타입 필터링)
         query = db.query(Student).filter(Student.company_id == company_id)
@@ -332,19 +340,29 @@ def generate_company_invoice_excel(
 
 @router.post("/billing-invoices/generate")
 def generate_company_invoice_pdfV2(
-    company_id: str,
+    department_id: str,
     year: int,
     month: int,
     student_type: Optional[str] = Query(None, description="학생 타입으로 필터링"),
     memo: Optional[str] = Query(None, description="비고 작성"),
     db: Session = Depends(get_db)
 ):
-    """회사별 청구서 생성 (billing_monthly_items 기반) 및 PDF 생성"""
+    """회사별 청구서 생성 (billing_monthly_items 기반) 및 PDF 생성 (부서 ID 기반)"""
     try:
-        # 회사 존재 여부 확인
-        company = db.query(Company).filter(Company.id == company_id).first()
+        # 부서 존재 여부 확인 및 회사 정보 가져오기
+        department = db.query(Department).filter(Department.id == department_id).first()
+        if not department:
+            raise HTTPException(status_code=404, detail="部署が見つかりません。")
+        
+        # 부서에서 회사 정보 가져오기
+        company = department.company
         if not company:
             raise HTTPException(status_code=404, detail="会社が見つかりません。")
+        
+        company_id = str(company.id)
+        company_name = company.name
+        department_name = department.name
+        company_address = company.address or ""
         
         # 해당 회사의 학생들 조회 (학생 타입 필터링)
         query = db.query(Student).filter(Student.company_id == company_id)
@@ -462,8 +480,8 @@ def generate_company_invoice_pdfV2(
                     "sender_tel": "TEL 06-6760-7830",
                     "sender_fax": "FAX -",
                     "registration_number": "登録番号 -",
-                    "recipient_name": f"{company.name}　御中",
-                    "recipient_address": company.address or ""
+                    "recipient_name": f"{company_name}　{department_name}　御中",
+                    "recipient_address": company_address
                 }
             elif student_type == "GENERAL":
                 return {
@@ -472,8 +490,8 @@ def generate_company_invoice_pdfV2(
                     "sender_tel": "TEL 06-6654-8836",
                     "sender_fax": "FAX 06-6654-8837",
                     "registration_number": "登録番号 T6120005018169",
-                    "recipient_name": f"{company.name}　御中",
-                    "recipient_address": company.address or ""
+                    "recipient_name": f"{company_name}　{department_name}　御中",
+                    "recipient_address": company_address
                 }
             else:  # 기본값 (기존 정보)
                 return {
@@ -482,8 +500,8 @@ def generate_company_invoice_pdfV2(
                     "sender_tel": "TEL 06-6654-8836",
                     "sender_fax": "FAX 06-6654-8837",
                     "registration_number": "登録番号 T6120005018169",
-                    "recipient_name": f"{company.name}　御中",
-                    "recipient_address": company.address or ""
+                    "recipient_name": f"{company_name}　{department_name}　御中",
+                    "recipient_address": company_address
                 }
         
         # 작성일 (오늘 날짜)
