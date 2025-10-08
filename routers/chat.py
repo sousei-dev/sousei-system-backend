@@ -7,7 +7,7 @@ import logging
 from database import SessionLocal, engine
 from models import (
     Conversation, ConversationMember, Message, MessageRead, 
-    Attachment, Reaction, Student, Company, Grade
+    Attachment, Reaction, MessageMention, Student, Company, Grade
 )
 from schemas import (
     ConversationCreate, ConversationUpdate, ConversationResponse,
@@ -603,6 +603,7 @@ async def create_message(
     conversation_id: str,
     body: Optional[str] = Form(None),
     parent_id: Optional[str] = Form(None),
+    mentioned_user_ids: Optional[str] = Form(None),  # JSON 문자열로 받음
     attachments: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -646,6 +647,36 @@ async def create_message(
         
         db.add(new_message)
         db.flush()  # ID 생성을 위해 flush
+        
+        # 멘션 처리
+        mention_list = []
+        if mentioned_user_ids:
+            try:
+                import json
+                # JSON 문자열을 리스트로 파싱
+                mentioned_ids = json.loads(mentioned_user_ids) if isinstance(mentioned_user_ids, str) else mentioned_user_ids
+                
+                if mentioned_ids and isinstance(mentioned_ids, list):
+                    for mentioned_user_id in mentioned_ids:
+                        # 멘션된 사용자가 대화방 멤버인지 확인
+                        is_member = db.query(ConversationMember).filter(
+                            ConversationMember.conversation_id == conversation_id,
+                            ConversationMember.user_id == mentioned_user_id
+                        ).first()
+                        
+                        if is_member:
+                            mention = MessageMention(
+                                message_id=new_message.id,
+                                mentioned_user_id=mentioned_user_id
+                            )
+                            db.add(mention)
+                            mention_list.append(mentioned_user_id)
+                        else:
+                            logger.warning(f"멘션된 사용자 {mentioned_user_id}는 대화방 멤버가 아닙니다")
+                    
+                    logger.info(f"멘션 처리 완료: {len(mention_list)}명")
+            except Exception as mention_error:
+                logger.error(f"멘션 처리 중 오류: {mention_error}")
         
         # 첨부파일 처리
         attachments_list = []
@@ -787,6 +818,23 @@ async def create_message(
                     "size_bytes": attachment.size_bytes
                 })
             
+            # 멘션 정보 준비 (프로필 정보 포함)
+            mentions_info_list = []
+            if mention_list:
+                try:
+                    # 멘션된 사용자들의 프로필 조회
+                    if supabase:
+                        mention_profiles_result = supabase.table('profiles').select('*').in_('id', mention_list).execute()
+                        if mention_profiles_result.data:
+                            for profile in mention_profiles_result.data:
+                                mentions_info_list.append({
+                                    "user_id": profile['id'],
+                                    "user_name": profile.get('name', '사용자'),
+                                    "user_avatar": profile.get('avatar', '')
+                                })
+                except Exception as mention_profile_error:
+                    logger.error(f"멘션 사용자 프로필 조회 실패: {mention_profile_error}")
+            
             # 메시지 타입 및 정렬 정보
             message_type = "other"  # 받는 사람 입장에서는 "other"
             alignment = "left"      # 받는 사람 입장에서는 "left"
@@ -816,6 +864,7 @@ async def create_message(
                 # 기타 정보
                 "attachments": attachment_list,
                 "reactions": [],
+                "mentions": mentions_info_list,  # 멘션 정보 추가
                 "is_read": True,  # 발신자 메시지는 자동으로 읽음
                 
                 # 프론트엔드 처리를 위한 추가 필드
@@ -999,6 +1048,7 @@ async def create_message(
             # 기타 정보
             "attachments": attachment_info,
             "reactions": [],
+            "mentions": mentions_info_list,  # 멘션 정보 추가
             "is_read": True,
             
             # 프론트엔드 처리를 위한 추가 필드
@@ -1046,7 +1096,9 @@ def get_messages(
             Message.deleted_at.is_(None)  # 삭제되지 않은 메시지만
         ).options(
             joinedload(Message.attachments),
-            joinedload(Message.reactions)
+            joinedload(Message.reactions),
+            joinedload(Message.parent_message),  # 부모 메시지도 미리 로드
+            joinedload(Message.mentions)  # 멘션 정보도 미리 로드
         ).order_by(desc(Message.created_at))
         
         # 전체 항목 수 계산
@@ -1061,7 +1113,7 @@ def get_messages(
         # 응답 데이터 준비
         result = []
         
-        # 1. 고유한 발신자 ID들과 반응한 사용자 ID들 수집 (배치 쿼리용)
+        # 1. 고유한 발신자 ID들과 반응한 사용자 ID들, 부모 메시지 발신자 ID들, 멘션된 사용자 ID들 수집 (배치 쿼리용)
         sender_ids = list(set([str(msg.sender_id) for msg in messages]))
         
         # 반응한 사용자 ID들도 수집
@@ -1071,8 +1123,34 @@ def get_messages(
                 for reaction in msg.reactions:
                     reaction_user_ids.add(str(reaction.user_id))
         
+        # 부모 메시지 발신자 ID들도 수집
+        parent_sender_ids = set()
+        parent_message_ids = []
+        for msg in messages:
+            if msg.parent_id:
+                parent_message_ids.append(msg.parent_id)
+                # parent_message가 로드되어 있으면 바로 사용
+                if msg.parent_message:
+                    parent_sender_ids.add(str(msg.parent_message.sender_id))
+        
+        # 로드되지 않은 부모 메시지가 있으면 배치로 조회
+        if parent_message_ids:
+            parent_messages = db.query(Message).filter(
+                Message.id.in_(parent_message_ids),
+                Message.deleted_at.is_(None)
+            ).all()
+            for parent_msg in parent_messages:
+                parent_sender_ids.add(str(parent_msg.sender_id))
+        
+        # 멘션된 사용자 ID들도 수집
+        mentioned_user_ids = set()
+        for msg in messages:
+            if msg.mentions:
+                for mention in msg.mentions:
+                    mentioned_user_ids.add(str(mention.mentioned_user_id))
+        
         # 모든 사용자 ID 합치기
-        all_user_ids = list(set(sender_ids) | reaction_user_ids)
+        all_user_ids = list(set(sender_ids) | reaction_user_ids | parent_sender_ids | mentioned_user_ids)
         
         # 2. 한 번에 모든 프로필 정보 조회 (배치 쿼리)
         profiles_data = {}
@@ -1154,6 +1232,60 @@ def get_messages(
                         "created_at": reaction.created_at
                     })
             
+            # 멘션 정보
+            mentions = []
+            if msg.mentions:
+                for mention in msg.mentions:
+                    mentioned_user_id = str(mention.mentioned_user_id)
+                    # 멘션된 사용자의 프로필 정보 가져오기
+                    mentioned_user_profile = profiles_data.get(mentioned_user_id, {})
+                    
+                    mentions.append({
+                        "user_id": mentioned_user_id,
+                        "user_name": mentioned_user_profile.get('name', '사용자') if mentioned_user_profile else '사용자',
+                        "user_avatar": mentioned_user_profile.get('avatar', '') if mentioned_user_profile else '',
+                        "created_at": mention.created_at
+                    })
+            
+            # 부모 메시지 정보 (답변인 경우)
+            parent_message_info = None
+            print(f"[DEBUG] 메시지 {msg.id} 처리 중 - parent_id: {msg.parent_id}")
+            
+            if msg.parent_id:
+                print(f"[DEBUG] parent_id 있음: {msg.parent_id}")
+                # parent_message가 joinedload로 로드되지 않은 경우를 대비해 직접 조회
+                parent_msg = msg.parent_message
+                print(f"[DEBUG] joinedload된 parent_message: {parent_msg}")
+                
+                if not parent_msg:
+                    print(f"[DEBUG] parent_message가 None이므로 직접 조회 시도")
+                    # joinedload가 실패한 경우 직접 조회
+                    parent_msg = db.query(Message).filter(
+                        Message.id == msg.parent_id,
+                        Message.deleted_at.is_(None)
+                    ).first()
+                    print(f"[DEBUG] 직접 조회 결과: {parent_msg}")
+                
+                if parent_msg:
+                    print(f"[DEBUG] parent_msg 존재, deleted_at: {parent_msg.deleted_at}")
+                    if not parent_msg.deleted_at:
+                        parent_sender_id = str(parent_msg.sender_id)
+                        parent_sender_profile = profiles_data.get(parent_sender_id, {})
+                        
+                        parent_message_info = {
+                            "id": str(parent_msg.id),
+                            "body": parent_msg.body,
+                            "sender_id": parent_sender_id,
+                            "sender_name": parent_sender_profile.get('name', '사용자') if parent_sender_profile else '사용자',
+                            "sender_avatar": parent_sender_profile.get('avatar', '') if parent_sender_profile else '',
+                            "created_at": parent_msg.created_at
+                        }
+                        print(f"[DEBUG] parent_message_info 생성 완료: {parent_message_info}")
+                    else:
+                        print(f"[DEBUG] 부모 메시지가 삭제됨")
+                else:
+                    print(f"[DEBUG] 부모 메시지를 찾을 수 없음")
+            
             # 캐시된 읽음 상태 사용
             is_read = read_status_data.get(str(msg.id), False)
             
@@ -1167,6 +1299,7 @@ def get_messages(
                 "sender_id": sender_id,
                 "body": msg.body,
                 "parent_id": str(msg.parent_id) if msg.parent_id else None,
+                "parent_message": parent_message_info,  # 부모 메시지 정보 추가
                 "created_at": msg.created_at,
                 "edited_at": msg.edited_at,
                 "deleted_at": msg.deleted_at,
@@ -1185,6 +1318,7 @@ def get_messages(
                 # 기타 정보
                 "attachments": attachments,
                 "reactions": reactions,
+                "mentions": mentions,  # 멘션 정보 추가
                 "is_read": is_read,
                 
                 # 프론트엔드 처리를 위한 추가 필드
@@ -1865,7 +1999,7 @@ async def mark_conversation_as_read(
 # ===== 이모지 반응 API =====
 
 @router.post("/messages/{message_id}/reactions")
-def add_reaction(
+async def add_reaction(
     message_id: str,
     reaction: ReactionCreate,
     db: Session = Depends(get_db),
@@ -1892,16 +2026,74 @@ def add_reaction(
             Reaction.emoji == reaction.emoji
         ).first()
         
+        # 사용자 프로필 정보 조회
+        user_profile = None
+        if supabase:
+            try:
+                profile_result = supabase.table('profiles').select('*').eq('id', current_user["id"]).execute()
+                if profile_result.data:
+                    profile = profile_result.data[0]
+                    user_profile = {
+                        "id": current_user["id"],
+                        "name": profile.get('name', '사용자'),
+                        "avatar": profile.get('avatar', '')
+                    }
+            except Exception as profile_error:
+                logger.warning(f"사용자 프로필 조회 실패: {profile_error}")
+        
+        if not user_profile:
+            user_profile = {
+                "id": current_user["id"],
+                "name": "사용자",
+                "avatar": ""
+            }
+        
+        action = None
+        
         # 같은 이모지 반응이 있으면 제거 (토글 방식)
         if existing_reaction:
             db.delete(existing_reaction)
             db.commit()
+            action = "removed"
+            
+            # WebSocket으로 실시간 알림
+            try:
+                websocket_message = {
+                    "type": "reaction_removed",
+                    "message_id": str(message_id),
+                    "conversation_id": str(message.conversation_id),
+                    "emoji": reaction.emoji,
+                    "user_id": current_user["id"],
+                    "user_name": user_profile["name"],
+                    "user_avatar": user_profile["avatar"],
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                # 채팅방의 다른 사용자들에게 전송
+                if str(message.conversation_id) in manager.room_connections:
+                    await manager.send_room_message(
+                        websocket_message,
+                        str(message.conversation_id),
+                        exclude_user=current_user["id"]
+                    )
+                else:
+                    await manager.send_to_conversation(
+                        websocket_message,
+                        str(message.conversation_id),
+                        exclude_user=current_user["id"]
+                    )
+                
+                logger.info(f"리액션 제거 알림 전송 완료: {message_id}")
+            except Exception as ws_error:
+                logger.error(f"WebSocket 리액션 제거 알림 실패: {ws_error}")
             
             return {
                 "message": "絵文字リアクションが削除されました",
                 "message_id": str(message_id),
                 "emoji": reaction.emoji,
                 "user_id": current_user["id"],
+                "user_name": user_profile["name"],
+                "user_avatar": user_profile["avatar"],
                 "action": "removed"
             }
         
@@ -1913,12 +2105,46 @@ def add_reaction(
         )
         db.add(new_reaction)
         db.commit()
+        action = "added"
+        
+        # WebSocket으로 실시간 알림
+        try:
+            websocket_message = {
+                "type": "reaction_added",
+                "message_id": str(message_id),
+                "conversation_id": str(message.conversation_id),
+                "emoji": reaction.emoji,
+                "user_id": current_user["id"],
+                "user_name": user_profile["name"],
+                "user_avatar": user_profile["avatar"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # 채팅방의 다른 사용자들에게 전송
+            if str(message.conversation_id) in manager.room_connections:
+                await manager.send_room_message(
+                    websocket_message,
+                    str(message.conversation_id),
+                    exclude_user=current_user["id"]
+                )
+            else:
+                await manager.send_to_conversation(
+                    websocket_message,
+                    str(message.conversation_id),
+                    exclude_user=current_user["id"]
+                )
+            
+            logger.info(f"리액션 추가 알림 전송 완료: {message_id}")
+        except Exception as ws_error:
+            logger.error(f"WebSocket 리액션 추가 알림 실패: {ws_error}")
         
         return {
             "message": "絵文字リアクションが追加されました",
             "message_id": str(message_id),
             "emoji": reaction.emoji,
             "user_id": current_user["id"],
+            "user_name": user_profile["name"],
+            "user_avatar": user_profile["avatar"],
             "action": "added"
         }
         

@@ -680,6 +680,7 @@ class Message(Base):
     attachments = relationship("Attachment", back_populates="message", cascade="all, delete-orphan")
     reactions = relationship("Reaction", back_populates="message", cascade="all, delete-orphan")
     reads = relationship("MessageRead", back_populates="message", cascade="all, delete-orphan")
+    mentions = relationship("MessageMention", back_populates="message", cascade="all, delete-orphan")
     
     # Supabase auth.users와의 가상 관계
     @property
@@ -730,6 +731,22 @@ class Reaction(Base):
     # Supabase auth.users와의 가상 관계
     @property
     def user_info(self):
+        return None  # 실제 구현에서는 Supabase 클라이언트로 조회
+
+class MessageMention(Base):
+    """메시지 내 사용자 멘션(태그)"""
+    __tablename__ = "message_mentions"
+    
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    mentioned_user_id = Column(String, primary_key=True)  # Supabase auth.users(id) 참조
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 관계 설정
+    message = relationship("Message", back_populates="mentions")
+    
+    # Supabase auth.users와의 가상 관계
+    @property
+    def mentioned_user_info(self):
         return None  # 실제 구현에서는 Supabase 클라이언트로 조회
     
 class PushSubscription(Base):

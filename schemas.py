@@ -1167,6 +1167,7 @@ class MessageCreate(BaseModel):
     body: Optional[str] = None
     parent_id: Optional[str] = None
     attachments: Optional[List[dict]] = None
+    mentioned_user_ids: Optional[List[str]] = None  # 멘션된 사용자 ID 리스트
 
 class MessageUpdate(BaseModel):
     body: Optional[str] = None
@@ -1177,6 +1178,7 @@ class MessageResponse(BaseModel):
     sender_id: str
     body: Optional[str] = None
     parent_id: Optional[str] = None
+    parent_message: Optional[dict] = None
     created_at: datetime
     edited_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
@@ -1195,6 +1197,7 @@ class MessageResponse(BaseModel):
     # 기타 정보
     attachments: Optional[List[dict]] = None
     reactions: Optional[List[dict]] = None
+    mentions: Optional[List[dict]] = None  # 멘션된 사용자 리스트
     is_read: Optional[bool] = None
     
     # 프론트엔드 처리를 위한 추가 필드
