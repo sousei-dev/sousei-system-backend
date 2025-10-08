@@ -861,27 +861,6 @@ async def create_message(
                 except Exception as fallback_error:
                     logger.error(f"전역 연결 전송도 실패: {fallback_error}")
             
-            # 발신자에게도 메시지 전송 (자신의 메시지 확인용)
-            try:
-                if conversation_id in manager.room_connections and current_user["id"] in manager.room_connections[conversation_id]:
-                    # 채팅방별 연결로 발신자에게 전송
-                    await manager.send_room_personal_message({
-                        "type": "message_sent",
-                        "message": complete_message_data,
-                        "conversation_id": conversation_id,
-                        "timestamp": datetime.utcnow().isoformat()
-                    }, current_user["id"], conversation_id)
-                else:
-                    # 전역 연결로 발신자에게 전송
-                    await manager.send_personal_message({
-                        "type": "message_sent",
-                        "message": complete_message_data,
-                        "conversation_id": conversation_id,
-                        "timestamp": datetime.utcnow().isoformat()
-                    }, current_user["id"])
-            except Exception as sender_error:
-                logger.error(f"발신자 메시지 전송 실패: {sender_error}")
-            
             # 채팅 리스트 업데이트 전송 (모든 참여자에게)
             try:
                 # 각 참여자별 읽지 않은 메시지 수 계산
@@ -930,11 +909,12 @@ async def create_message(
                     "timestamp": new_message.created_at.isoformat()
                 }
                 
+                # 모든 참여자에게 채팅 리스트 업데이트 전송 (발신자 제외)
                 await manager.send_chat_list_update(
                     conversation_id, 
                     "new_message", 
-                    chat_list_update_data, 
-                    target_user=current_user["id"]
+                    chat_list_update_data,
+                    exclude_user=current_user["id"]
                 )
                 
             except Exception as update_error:
@@ -1896,11 +1876,18 @@ def add_reaction(
             Reaction.emoji == reaction.emoji
         ).first()
         
+        # 같은 이모지 반응이 있으면 제거 (토글 방식)
         if existing_reaction:
-            raise HTTPException(
-                status_code=400,
-                detail="既に同じ絵文字リアクションを追加しています"
-            )
+            db.delete(existing_reaction)
+            db.commit()
+            
+            return {
+                "message": "絵文字リアクションが削除されました",
+                "message_id": str(message_id),
+                "emoji": reaction.emoji,
+                "user_id": current_user["id"],
+                "action": "removed"
+            }
         
         # 새 반응 추가
         new_reaction = Reaction(
@@ -1915,7 +1902,8 @@ def add_reaction(
             "message": "絵文字リアクションが追加されました",
             "message_id": str(message_id),
             "emoji": reaction.emoji,
-            "user_id": current_user["id"]
+            "user_id": current_user["id"],
+            "action": "added"
         }
         
     except HTTPException:

@@ -340,6 +340,17 @@ def get_monthly_invoice_preview_by_students_company(
     if month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="월은 1-12 사이의 값이어야 합니다")
 
+    # billing_scope 확인 (company_id가 있는 경우에만)
+    if company_id:
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if company and company.billing_scope:
+            # billing_scope가 True인 경우: department_id 필수
+            if not department_id:
+                raise HTTPException(status_code=400, detail="billing_scope가 true인 회사는 department_id가 필요합니다")
+        elif company and not company.billing_scope:
+            # billing_scope가 False인 경우: department_id 무시
+            department_id = None
+
     # 전월의 시작/종료일 계산 (7월 데이터 요청 시 6월 거주 기록 조회)
     if month == 1:
         prev_year = year - 1
@@ -1365,12 +1376,28 @@ def download_monthly_invoice_pdf_students_company(
 ):
     """월간 학생별 청구서 PDF 다운로드 (회사 기준)"""
     try:
+        # 회사 정보 조회
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
+        
+        # billing_scope에 따라 department_id 처리
+        if company.billing_scope:
+            # billing_scope가 True인 경우: department_id 필수
+            if not department_id:
+                raise HTTPException(status_code=400, detail="billing_scope가 true인 회사는 department_id가 필요합니다")
+            # department_id를 그대로 사용
+            filter_department_id = department_id
+        else:
+            # billing_scope가 False인 경우: department_id 무시하고 회사 전체
+            filter_department_id = None
+        
         # 미리보기 데이터 조회 - 직접 함수 호출
         preview_data = get_monthly_invoice_preview_by_students_company(
             year=year,
             month=month,
             company_id=company_id,
-            department_id=department_id,
+            department_id=filter_department_id,
             db=db
         )
         
@@ -1381,11 +1408,6 @@ def download_monthly_invoice_pdf_students_company(
         else:
             next_year = year
             next_month = month + 1
-        
-        # 회사 정보 조회
-        company = db.query(Company).filter(Company.id == company_id).first()
-        if not company:
-            raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
         
         # PDF용 데이터 준비 - 2페이지 리스트 포함
         pdf_data = {

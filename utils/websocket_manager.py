@@ -294,7 +294,8 @@ class ConnectionManager:
         conversation_id: str, 
         event_type: str, 
         data: dict, 
-        target_user: str = None
+        target_user: str = None,
+        exclude_user: str = None
     ):
         """채팅 리스트 업데이트 전송"""
         message = {
@@ -310,7 +311,9 @@ class ConnectionManager:
             await self.send_personal_message(message, target_user)
         
         # 모든 참여자에게도 전송 (다른 화면에 있는 사용자들을 위해)
-        await self.send_to_conversation(message, conversation_id, exclude_user=target_user)
+        # exclude_user가 지정되면 해당 사용자 제외, 아니면 target_user 제외
+        exclude = exclude_user if exclude_user else target_user
+        await self.send_to_conversation(message, conversation_id, exclude_user=exclude)
     
     async def send_conversation_update(self, conversation_id: str, update_type: str, update_data: dict, exclude_user: Optional[str] = None):
         """대화방 정보 변경 시 모든 참여자에게 업데이트 알림"""
