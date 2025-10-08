@@ -1061,15 +1061,25 @@ def get_messages(
         # 응답 데이터 준비
         result = []
         
-        # 1. 고유한 발신자 ID들 수집 (배치 쿼리용)
+        # 1. 고유한 발신자 ID들과 반응한 사용자 ID들 수집 (배치 쿼리용)
         sender_ids = list(set([str(msg.sender_id) for msg in messages]))
+        
+        # 반응한 사용자 ID들도 수집
+        reaction_user_ids = set()
+        for msg in messages:
+            if msg.reactions:
+                for reaction in msg.reactions:
+                    reaction_user_ids.add(str(reaction.user_id))
+        
+        # 모든 사용자 ID 합치기
+        all_user_ids = list(set(sender_ids) | reaction_user_ids)
         
         # 2. 한 번에 모든 프로필 정보 조회 (배치 쿼리)
         profiles_data = {}
-        if supabase and sender_ids:
+        if supabase and all_user_ids:
             try:
                 # IN 쿼리로 배치 조회
-                profile_result = supabase.table('profiles').select('*').in_('id', sender_ids).execute()
+                profile_result = supabase.table('profiles').select('*').in_('id', all_user_ids).execute()
                 if profile_result.data:
                     for profile in profile_result.data:
                         profiles_data[profile['id']] = profile
@@ -1132,9 +1142,15 @@ def get_messages(
             reactions = []
             if msg.reactions:
                 for reaction in msg.reactions:
+                    reaction_user_id = str(reaction.user_id)
+                    # 반응한 사용자의 프로필 정보 가져오기
+                    reaction_user_profile = profiles_data.get(reaction_user_id, {})
+                    
                     reactions.append({
                         "emoji": reaction.emoji,
-                        "user_id": str(reaction.user_id),  # UUID를 문자열로 변환
+                        "user_id": reaction_user_id,
+                        "user_name": reaction_user_profile.get('name', '사용자') if reaction_user_profile else '사용자',
+                        "user_avatar": reaction_user_profile.get('avatar', '') if reaction_user_profile else '',
                         "created_at": reaction.created_at
                     })
             
