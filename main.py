@@ -61,7 +61,8 @@ origins = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:5175",    
-    "http://localhost:8000",     
+    "http://localhost:8000",
+    "http://localhost:5050",          
     "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
     "http://127.0.0.1:8080",
@@ -644,6 +645,82 @@ async def debug_websocket_all():
             for conv_id, users in ws_manager.room_connections.items()
         }
     }
+
+@app.post("/api/notify-update")
+async def notify_update(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    프론트엔드에 업데이트 알림 전송
+    - 관리자 권한 필수 (admin, manager)
+    - 모든 연결된 사용자에게 WebSocket으로 알림 전송
+    
+    사용 방법:
+    POST /api/notify-update
+    Headers:
+      Authorization: Bearer <your-admin-token>
+    Body: {
+      "version": "1.2.0",
+      "message": "새로운 기능이 추가되었습니다",
+      "type": "info",
+      "force_reload": false,
+      "release_notes": ["기능1", "기능2"]
+    }
+    """
+    try:
+        # 관리자 권한 확인
+        if current_user.get("role") not in ["admin", "manager"]:
+            raise HTTPException(
+                status_code=403,
+                detail="管理者権限が必要です"
+            )
+        
+        notified_by = current_user.get("id", "unknown")
+        logger.info(f"업데이트 알림 요청 - 발신자: {notified_by}, 권한: {current_user.get('role')}")
+        
+        # 요청 본문 파싱
+        body = await request.json()
+        
+        # 업데이트 정보
+        version = body.get("version", "")
+        message = body.get("message", "新しいバージョンが利用可能です")
+        update_type = body.get("type", "info")  # info, warning, critical
+        force_reload = body.get("force_reload", False)
+        release_notes = body.get("release_notes", [])
+        
+        # WebSocket 메시지 구성
+        update_notification = {
+            "type": "system_update",
+            "version": version,
+            "message": message,
+            "update_type": update_type,
+            "force_reload": force_reload,
+            "release_notes": release_notes,
+            "timestamp": datetime.utcnow().isoformat(),
+            "notified_by": notified_by
+        }
+        
+        # 모든 연결된 사용자에게 브로드캐스트
+        await ws_manager.broadcast(update_notification)
+        
+        logger.info(f"업데이트 알림 브로드캐스트 완료 - 버전: {version}, 발신자: {notified_by}")
+        
+        return {
+            "status": "success",
+            "message": "更新通知が送信されました",
+            "notification": update_notification,
+            "total_users_notified": ws_manager.get_online_users_count()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"업데이트 알림 전송 실패: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"更新通知の送信中にエラーが発生しました: {str(e)}"
+        )
 
 # 기타 필요한 엔드포인트들...
 # (필요에 따라 추가)
