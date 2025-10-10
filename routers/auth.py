@@ -3,11 +3,15 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 from models import User
-from schemas import UserCreate, UserLogin
+from schemas import UserCreate, UserLogin, ChangePasswordRequest, AdminResetPasswordRequest
 from datetime import timedelta
 import os
 from supabase import create_client
 from passlib.hash import bcrypt
+from utils.dependencies import get_current_user
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["인증"])
 
@@ -215,4 +219,120 @@ async def signup(user: UserCreate):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"회원가입 중 오류가 발생했습니다: {error_message}"
-            ) 
+            )
+
+@router.post("/change-password")
+async def change_password(
+    password_data: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    현재 로그인한 사용자의 비밀번호 변경
+    - 현재 비밀번호 확인 필요
+    - 새 비밀번호로 변경
+    """
+    try:
+        # 현재 비밀번호로 재인증 (보안 강화)
+        try:
+            supabase.auth.sign_in_with_password({
+                "email": current_user.get("email"),
+                "password": password_data.current_password
+            })
+        except Exception as verify_error:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="現在のパスワードが正しくありません"
+            )
+        
+        # Supabase를 통해 비밀번호 변경
+        try:
+            # 새 비밀번호로 업데이트
+            update_response = supabase.auth.update_user({
+                "password": password_data.new_password
+            })
+            
+            logger.info(f"비밀번호 변경 성공 - 사용자: {current_user.get('id')}")
+            
+            return {
+                "message": "パスワードが正常に変更されました",
+                "user_id": current_user.get("id"),
+                "email": current_user.get("email")
+            }
+            
+        except Exception as update_error:
+            logger.error(f"비밀번호 변경 실패: {str(update_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"パスワード変更中にエラーが発生しました: {str(update_error)}"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"비밀번호 변경 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"パスワード変更中にエラーが発生しました: {str(e)}"
+        )
+
+@router.post("/admin/reset-password")
+async def admin_reset_password(
+    reset_data: AdminResetPasswordRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    관리자가 다른 사용자의 비밀번호 재설정
+    - 관리자 권한 필수 (admin만 가능)
+    - 대상 사용자의 현재 비밀번호 불필요
+    """
+    try:
+        # 관리자 권한 확인 (admin만 가능, manager는 불가)
+        if current_user.get("role") != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="管理者権限が必要です"
+            )
+        
+        # Supabase Admin API를 사용하여 비밀번호 재설정
+        # Service Role Key가 필요합니다
+        admin_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        
+        if not admin_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="管理者APIキーが設定されていません"
+            )
+        
+        # Admin 클라이언트 생성
+        admin_supabase = create_client(SUPABASE_URL, admin_key)
+        
+        try:
+            # Admin API를 사용하여 비밀번호 재설정
+            admin_supabase.auth.admin.update_user_by_id(
+                reset_data.user_id,
+                {"password": reset_data.new_password}
+            )
+            
+            logger.info(f"비밀번호 재설정 성공 - 대상 사용자: {reset_data.user_id}, 관리자: {current_user.get('id')}")
+            
+            return {
+                "message": "パスワードが正常にリセットされました",
+                "user_id": reset_data.user_id,
+                "reset_by": current_user.get("id")
+            }
+            
+        except Exception as reset_error:
+            logger.error(f"비밀번호 재설정 실패: {str(reset_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"パスワードリセット中にエラーが発生しました: {str(reset_error)}"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"비밀번호 재설정 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"パスワードリセット中にエラーが発生しました: {str(e)}"
+        ) 

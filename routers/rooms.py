@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List
 from database import SessionLocal
-from models import Room, Building, Student, RoomUtility, Resident
+from models import Room, Building, Student, RoomUtility, Resident, UserBuildingPermission
 from schemas import RoomResponse, RoomUpdate, RoomCreate
 from database_log import create_database_log
 from utils.dependencies import get_current_user
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import uuid
 
 router = APIRouter(prefix="/rooms", tags=["방 관리"])
@@ -187,17 +187,33 @@ def get_room_capacity_status(room_id: str, db: Session = Depends(get_db)):
 @router.get("/{room_id}/residents")
 def get_room_residents(
     room_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
-    """방 거주자 목록 조회"""
+    """방 거주자 목록 조회 - 권한 체크"""
     try:
         # 방 존재 여부 확인
         room = db.query(Room).options(
-            joinedload(Room.current_residents).joinedload(Student.grade)
+            joinedload(Room.current_residents).joinedload(Student.grade),
+            joinedload(Room.building)
         ).filter(Room.id == room_id).first()
         
         if not room:
             raise HTTPException(status_code=404, detail="방을 찾을 수 없습니다")
+        
+        # 권한 체크 (admin, manager가 아닌 경우)
+        if current_user.get("role") not in ["admin", "manager"]:
+            # 해당 방의 빌딩에 대한 권한 확인
+            has_permission = db.query(UserBuildingPermission).filter(
+                UserBuildingPermission.user_id == current_user["id"],
+                UserBuildingPermission.building_id == room.building_id
+            ).first()
+            
+            if not has_permission:
+                raise HTTPException(
+                    status_code=403,
+                    detail="この建物へのアクセス権限がありません"
+                )
         
         residents_data = []
         for resident in room.current_residents:

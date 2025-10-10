@@ -181,6 +181,19 @@ class Building(Base):
 
     # 관계 설정
     rooms = relationship("Room", back_populates="building", cascade="all, delete-orphan")
+    user_permissions = relationship("UserBuildingPermission", back_populates="building", cascade="all, delete-orphan")
+
+class UserBuildingPermission(Base):
+    """유저별 빌딩 접근 권한"""
+    __tablename__ = "user_building_permissions"
+    
+    user_id = Column(String, primary_key=True)  # Supabase auth.users(id) 참조
+    building_id = Column(UUID(as_uuid=True), ForeignKey("buildings.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String)  # 권한을 부여한 관리자 ID
+    
+    # 관계 설정
+    building = relationship("Building", back_populates="user_permissions")
 
 class Room(Base):
     __tablename__ = "rooms"

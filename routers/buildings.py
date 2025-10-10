@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List
 from database import SessionLocal
-from models import Building, Room, Student, Resident, BillingMonthlyItem, RoomUtility, BuildingCategoriesRent, Company
+from models import Building, Room, Student, Resident, BillingMonthlyItem, RoomUtility, BuildingCategoriesRent, Company, UserBuildingPermission
 from schemas import BuildingResponse, BuildingUpdate, BuildingCreate
 from datetime import datetime, date, timedelta
 from database_log import create_database_log
@@ -38,9 +38,30 @@ def get_buildings(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    """빌딩 목록 조회 - 권한 기반 필터링 적용"""
     # 기본 쿼리 생성
     query = db.query(Building)
+    
+    # 권한 기반 필터링 (admin, manager가 아닌 경우에만 적용)
+    if current_user.get("role") not in ["admin", "manager"]:
+        # 사용자가 접근 가능한 빌딩 ID 조회
+        user_permissions = db.query(UserBuildingPermission).filter(
+            UserBuildingPermission.user_id == current_user["id"]
+        ).all()
         
+        if user_permissions:
+            # 권한이 있는 빌딩만 조회
+            allowed_building_ids = [perm.building_id for perm in user_permissions]
+            query = query.filter(Building.id.in_(allowed_building_ids))
+        else:
+            # 권한이 없으면 빈 결과 반환
+            return {
+                "items": [],
+                "total": 0,
+                "total_pages": 0,
+                "current_page": page
+            }
+    
     # 필터 조건 추가
     if name:
         query = query.filter(Building.name.ilike(f"%{name}%"))
@@ -48,20 +69,21 @@ def get_buildings(
         query = query.filter(Building.address.ilike(f"%{address}%"))
     if resident_type:
         query = query.filter(Building.resident_type == resident_type)
-        # 전체 항목 수 계산
-        total_count = query.count()
-        
-        # 페이지네이션 적용
+    
+    # 전체 항목 수 계산
+    total_count = query.count()
+    
+    # 페이지네이션 적용
     buildings = query.offset((page - 1) * size).limit(size).all()
-        
-        # 전체 페이지 수 계산
+    
+    # 전체 페이지 수 계산
     total_pages = (total_count + size - 1) // size
-        
+    
     return {
-      "items": buildings,
-      "total": total_count,
-      "total_pages": total_pages,
-      "current_page": page
+        "items": buildings,
+        "total": total_count,
+        "total_pages": total_pages,
+        "current_page": page
     }
 @router.post("/", response_model=BuildingResponse)
 def create_building(
@@ -110,9 +132,26 @@ def create_building(
 
 @router.get("/options")
 def get_building_options(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    """건물 옵션 목록 (드롭다운용)"""
+    """건물 옵션 목록 (드롭다운용) - 권한 기반 필터링 적용"""
     try:
-        buildings = db.query(Building).order_by(Building.name.asc()).all()
+        query = db.query(Building).order_by(Building.name.asc())
+        
+        # 권한 기반 필터링 (admin, manager가 아닌 경우에만 적용)
+        if current_user.get("role") not in ["admin", "manager"]:
+            # 사용자가 접근 가능한 빌딩 ID 조회
+            user_permissions = db.query(UserBuildingPermission).filter(
+                UserBuildingPermission.user_id == current_user["id"]
+            ).all()
+            
+            if user_permissions:
+                # 권한이 있는 빌딩만 조회
+                allowed_building_ids = [perm.building_id for perm in user_permissions]
+                query = query.filter(Building.id.in_(allowed_building_ids))
+            else:
+                # 권한이 없으면 빈 결과 반환
+                return {"options": []}
+        
+        buildings = query.all()
         
         options = [
             {
@@ -132,8 +171,22 @@ def get_building_empty_rooms(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """특정 빌딩의 빈 호실 목록을 조회"""
+    """특정 빌딩의 빈 호실 목록을 조회 - 권한 체크"""
     try:
+        # 권한 체크 (admin, manager가 아닌 경우)
+        if current_user.get("role") not in ["admin", "manager"]:
+            # 해당 빌딩에 대한 권한 확인
+            has_permission = db.query(UserBuildingPermission).filter(
+                UserBuildingPermission.user_id == current_user["id"],
+                UserBuildingPermission.building_id == building_id
+            ).first()
+            
+            if not has_permission:
+                raise HTTPException(
+                    status_code=403,
+                    detail="この建物へのアクセス権限がありません"
+                )
+        
         # 빌딩 존재 여부 확인
         building = db.query(Building).filter(Building.id == building_id).first()
         if not building:
@@ -190,6 +243,21 @@ def get_building(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    """개별 빌딩 조회 - 권한 체크"""
+    # 권한 체크 (admin, manager가 아닌 경우)
+    if current_user.get("role") not in ["admin", "manager"]:
+        # 해당 빌딩에 대한 권한 확인
+        has_permission = db.query(UserBuildingPermission).filter(
+            UserBuildingPermission.user_id == current_user["id"],
+            UserBuildingPermission.building_id == building_id
+        ).first()
+        
+        if not has_permission:
+            raise HTTPException(
+                status_code=403,
+                detail="この建物へのアクセス権限がありません"
+            )
+    
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
         raise HTTPException(status_code=404, detail="빌딩을 찾을 수 없습니다")
@@ -205,6 +273,21 @@ def get_rooms_by_building(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    """빌딩별 방 목록 조회 - 권한 체크"""
+    # 권한 체크 (admin, manager가 아닌 경우)
+    if current_user.get("role") not in ["admin", "manager"]:
+        # 해당 빌딩에 대한 권한 확인
+        has_permission = db.query(UserBuildingPermission).filter(
+            UserBuildingPermission.user_id == current_user["id"],
+            UserBuildingPermission.building_id == building_id
+        ).first()
+        
+        if not has_permission:
+            raise HTTPException(
+                status_code=403,
+                detail="この建物へのアクセス権限がありません"
+            )
+    
     # 빌딩 존재 여부 확인
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:

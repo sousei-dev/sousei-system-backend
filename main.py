@@ -47,7 +47,7 @@ from utils.dependencies import get_current_user
 # 라우터 임포트
 from routers import auth, contact, residents, students, billing, elderly, companies, grades, buildings, rooms
 from routers import users, upload, room_operations, room_charges, room_utilities, monthly_billing, elderly_care, database_logs
-from routers import invoices, monthly_utilities, chat, websocket
+from routers import invoices, monthly_utilities, chat, websocket, building_permissions
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -98,6 +98,7 @@ app.include_router(billing.router)
 app.include_router(elderly.router)
 app.include_router(companies.router)  # 간단한 버전으로 대체
 # app.include_router(grades.router)  # 간단한 버전으로 대체
+app.include_router(building_permissions.router)  # buildings.router보다 먼저 등록 (경로 충돌 방지)
 app.include_router(buildings.router)
 app.include_router(rooms.router)  # 모든 /rooms API가 여기에 통합됨
 
@@ -437,6 +438,109 @@ async def debug_vapid_claims(endpoint: str):
         }
     except Exception as e:
         return {"error": f"VAPID 클레임 생성 실패: {e}"}
+
+async def send_push_notification_to_user(
+    user_id: str,
+    title: str,
+    body: str,
+    notification_type: str = "general",
+    data: dict = None,
+    force_send: bool = False  # True면 온라인 상태 무시하고 무조건 전송
+):
+    """특정 사용자에게 푸시 알림 전송"""
+    logger.info(f"푸시 알림 전송 시작: user_id={user_id}, title={title}, type={notification_type}, force_send={force_send}")
+    
+    try:
+        db = SessionLocal()
+        try:
+            # force_send=False인 경우, 사용자가 온라인이면 푸시 건너뜀
+            if not force_send:
+                is_online = ws_manager.get_connection_status(user_id)
+                if is_online:
+                    logger.info(f"사용자 {user_id}가 온라인 상태(WebSocket 연결)이므로 푸시 알림 건너뜀")
+                    return
+            else:
+                logger.info(f"force_send=True - 온라인 여부와 관계없이 푸시 알림 전송")
+            
+            # 사용자의 푸시 구독 정보 조회
+            subscriptions = db.query(PushSubscription).filter(
+                PushSubscription.user_id == user_id
+            ).all()
+            
+            if not subscriptions:
+                logger.info(f"사용자 {user_id}의 푸시 구독 정보가 없습니다")
+                return
+            
+            # VAPID 개인키 가져오기
+            vapid_private_key = get_vapid_private_key()
+            if not vapid_private_key:
+                logger.error("VAPID 개인키를 가져올 수 없습니다")
+                return
+            
+            # 푸시 알림 전송
+            for subscription in subscriptions:
+                try:
+                    subscription_info = {
+                        "endpoint": subscription.endpoint,
+                        "keys": {
+                            "p256dh": subscription.p256dh,
+                            "auth": subscription.auth
+                        }
+                    }
+                    
+                    # 푸시 페이로드 생성
+                    push_data = {
+                        "type": notification_type,  # 알림 타입
+                        **(data or {})  # 추가 데이터
+                    }
+                    
+                    payload = {
+                        "notification": {
+                            "title": title,
+                            "body": body,
+                            "icon": "/static/icons/icon-192x192.png",
+                            "badge": "/static/icons/badge-72x72.png",
+                            "vibrate": [200, 100, 200],
+                            "tag": f"{notification_type}-{datetime.utcnow().timestamp()}",
+                            "requireInteraction": True,
+                            "data": push_data
+                        }
+                    }
+                    
+                    logger.info(f"푸시 페이로드: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+                    
+                    # webpush 호출
+                    vapid_claims = get_vapid_claims(subscription.endpoint)
+                    logger.info(f"사용할 VAPID 클레임: {vapid_claims}")
+                    
+                    webpush(
+                        subscription_info=subscription_info,
+                        data=json.dumps(payload),
+                        vapid_private_key=vapid_private_key,
+                        vapid_claims=vapid_claims,
+                        ttl=86400,  # 24시간
+                        headers={
+                            "Urgency": "high"
+                        }
+                    )
+                    
+                    logger.info(f"푸시 알림 전송 성공: 사용자 {user_id}, 구독 ID {subscription.id}")
+                    
+                except WebPushException as ex:
+                    logger.error(f"푸시 알림 전송 실패 (구독 ID: {subscription.id}): {ex}")
+                    if ex.response and ex.response.status_code == 410:
+                        # 만료된 구독 삭제
+                        db.delete(subscription)
+                        db.commit()
+                        logger.info(f"만료된 구독 삭제: {subscription.id}")
+                except Exception as e:
+                    logger.error(f"푸시 알림 전송 중 오류: {e}")
+        
+        finally:
+            db.close()
+    
+    except Exception as e:
+        logger.error(f"사용자 푸시 알림 전송 중 오류: {e}")
 
 async def send_push_notification_to_conversation(
     conversation_id: str, 

@@ -418,6 +418,58 @@ async def create_contact_with_photos(
         except Exception as log_error:
             print(f"ログ作成中にエラー: {log_error}")
         
+        # Admin 사용자들에게 Web Push 알림 전송
+        try:
+            # Supabase에서 admin 권한 사용자 조회
+            admin_profiles = supabase.table('profiles').select('id, name, role').eq('role', 'admin').execute()
+            
+            # 리포트 생성자 정보 조회
+            creator_profile = supabase.table('profiles').select('id, name').eq('id', current_user["id"]).execute()
+            creator_name = creator_profile.data[0].get('name', '사용자') if creator_profile.data else '사용자'
+            
+            # contact_type 한국어 매핑
+            contact_type_map = {
+                "defect": "欠陥",
+                "claim": "クレーム", 
+                "other": "その他"
+            }
+            contact_type_ja = contact_type_map.get(new_contact.contact_type, new_contact.contact_type)
+            
+            # Admin 사용자들에게 Web Push 전송
+            notified_count = 0
+            if admin_profiles.data:
+                # main.py의 send_push_notification_to_user 함수 import
+                from main import send_push_notification_to_user
+                
+                for admin_user in admin_profiles.data:
+                    admin_user_id = admin_user.get('id')
+                    if admin_user_id != current_user["id"]:  # 본인 제외
+                        try:
+                            # Web Push 알림 전송 (온라인 상태 무시하고 항상 전송)
+                            await send_push_notification_to_user(
+                                user_id=admin_user_id,
+                                title="新しいレポート",
+                                body=f"{creator_name}が{contact_type_ja}レポートを作成しました",
+                                notification_type="new_contact_report",
+                                data={
+                                    "contact_id": str(new_contact.id),
+                                    "contact_type": new_contact.contact_type,
+                                    "creator_name": creator_name,
+                                    "url": f"/contact/{new_contact.id}",
+                                    "photos_count": len(uploaded_photos)
+                                },
+                                force_send=True  # 온라인 상태 무시하고 항상 전송
+                            )
+                            notified_count += 1
+                        except Exception as push_error:
+                            print(f"Admin {admin_user_id}에게 푸시 알림 전송 실패: {push_error}")
+            
+            print(f"[INFO] Admin 사용자 {notified_count}명에게 Web Push 알림 전송 완료")
+            
+        except Exception as notification_error:
+            print(f"[WARNING] Admin 푸시 알림 전송 실패: {notification_error}")
+            # 알림 전송 실패해도 리포트 생성은 성공으로 처리
+        
         return {
             "message": f"レポートが正常に作成されました。写真{len(uploaded_photos)}枚が添付されました。",
             "contact": {
