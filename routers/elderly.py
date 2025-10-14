@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 from database import SessionLocal, engine
 from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly
-from schemas import ElderlyHospitalizationCreate, ElderlyMealRecordCreate, ElderlyMealRecordResponse
+from schemas import ElderlyHospitalizationCreate, ElderlyMealRecordCreate, ElderlyMealRecordResponse, NewResidenceRequest, ElderlyCreate, ElderlyUpdate
 from datetime import datetime, date, timedelta
 import uuid
+import calendar
 from database_log import create_database_log
 from utils.dependencies import get_current_user
 
@@ -60,12 +61,16 @@ def get_elderly(
     if status:
         query = query.filter(Elderly.status == status)
     
+    # building_id 또는 room_number 필터가 있으면 Room 조인 (한 번만)
+    needs_room_join = building_id or room_number
+    if needs_room_join:
+        query = query.join(Room, Elderly.current_room_id == Room.id)
+    
     if building_id:
-        query = query.join(Room, Elderly.current_room_id == Room.id).join(Building, Room.building_id == Building.id)
+        query = query.join(Building, Room.building_id == Building.id)
         query = query.filter(Building.id == building_id)
     
     if room_number:
-        query = query.join(Room, Elderly.current_room_id == Room.id)
         query = query.filter(Room.room_number.ilike(f"%{room_number}%"))
     
     # 정렬 적용
@@ -176,6 +181,349 @@ def get_elderly(
         "total": total_count,
         "total_pages": (total_count + page_size - 1) // page_size
     }
+
+@router.get("/{elderly_id}")
+def get_elderly_detail(
+    elderly_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    특정 고령자의 상세 정보를 조회합니다.
+    """
+    try:
+        # 고령자 정보 조회
+        elderly = db.query(Elderly).options(
+            joinedload(Elderly.current_room).joinedload(Room.building),
+            joinedload(Elderly.category),
+            joinedload(Elderly.hospitalizations)
+        ).filter(Elderly.id == elderly_id).first()
+        
+        if not elderly:
+            raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+        
+        # 입원 상태 확인
+        hospitalization_status = "正常"
+        latest_hospitalization = None
+        
+        if elderly.hospitalizations:
+            # 가장 최근 입원 기록 찾기
+            latest_hospitalization = max(elderly.hospitalizations, key=lambda x: x.date)
+            
+            # 입원 기록이 있고 퇴원 기록이 없으면 입원중
+            admission_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'admission']
+            discharge_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'discharge']
+            
+            if admission_records and not discharge_records:
+                hospitalization_status = "入院中"
+            elif admission_records and discharge_records:
+                latest_admission = max(admission_records, key=lambda x: x.date)
+                latest_discharge = max(discharge_records, key=lambda x: x.date)
+                
+                if latest_admission.date > latest_discharge.date:
+                    hospitalization_status = "入院中"
+                else:
+                    hospitalization_status = "正常"
+        
+        # 입원 이력 (최근 10개)
+        hospitalization_history = []
+        if elderly.hospitalizations:
+            sorted_hospitalizations = sorted(elderly.hospitalizations, key=lambda x: x.date, reverse=True)[:10]
+            for h in sorted_hospitalizations:
+                hospitalization_history.append({
+                    "id": str(h.id),
+                    "elderly_id": str(h.elderly_id),
+                    "hospitalization_type": h.hospitalization_type,
+                    "hospital_name": h.hospital_name,
+                    "date": h.date,
+                    "last_meal_date": h.last_meal_date,
+                    "last_meal_type": h.last_meal_type,
+                    "meal_resume_date": h.meal_resume_date,
+                    "meal_resume_type": h.meal_resume_type,
+                    "note": h.note,
+                    "created_at": h.created_at,
+                    "created_by": h.created_by
+                })
+        
+        # 최근 식사 기록 조회 (최근 30일)
+        thirty_days_ago = date.today() - timedelta(days=30)
+        
+        # Elderly와 연결된 Resident 조회
+        resident = db.query(Resident).filter(
+            Resident.resident_id == elderly_id,
+            Resident.resident_type == "elderly",
+            Resident.is_active == True
+        ).first()
+        
+        recent_meal_records = []
+        if resident:
+            meal_records = db.query(ElderlyMealRecord).filter(
+                ElderlyMealRecord.resident_id == resident.id,
+                ElderlyMealRecord.skip_date >= thirty_days_ago
+            ).order_by(ElderlyMealRecord.skip_date.desc()).limit(30).all()
+            
+            for record in meal_records:
+                recent_meal_records.append({
+                    "id": str(record.id),
+                    "resident_id": str(record.resident_id),
+                    "skip_date": record.skip_date,
+                    "meal_type": record.meal_type,
+                    "created_at": record.created_at
+                })
+        
+        # 응답 데이터 구성
+        elderly_detail = {
+            "id": str(elderly.id),
+            "name": elderly.name,
+            "name_katakana": elderly.name_katakana,
+            "email": elderly.email,
+            "phone": elderly.phone,
+            "avatar": elderly.avatar,
+            "gender": elderly.gender,
+            "birth_date": elderly.birth_date,
+            "age": (date.today() - elderly.birth_date).days // 365 if elderly.birth_date else None,
+            "care_level": elderly.care_level,
+            "status": elderly.status,
+            "note": elderly.note,
+            "hospitalization_status": hospitalization_status,
+            "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
+            "created_at": elderly.created_at,
+            "updated_at": elderly.updated_at if hasattr(elderly, 'updated_at') else None,
+            "current_room": None,
+            "latest_hospitalization": {
+                "id": str(latest_hospitalization.id),
+                "elderly_id": str(latest_hospitalization.elderly_id),
+                "hospitalization_type": latest_hospitalization.hospitalization_type,
+                "hospital_name": latest_hospitalization.hospital_name,
+                "date": latest_hospitalization.date,
+                "last_meal_date": latest_hospitalization.last_meal_date,
+                "last_meal_type": latest_hospitalization.last_meal_type,
+                "meal_resume_date": latest_hospitalization.meal_resume_date,
+                "meal_resume_type": latest_hospitalization.meal_resume_type,
+                "note": latest_hospitalization.note
+            } if latest_hospitalization else None,
+            "hospitalization_history": hospitalization_history,
+            "recent_meal_records": recent_meal_records,
+            "resident_info": {
+                "id": str(resident.id),
+                "resident_type": resident.resident_type,
+                "is_active": resident.is_active
+            } if resident else None
+        }
+        
+        # 현재 방 정보 추가
+        if elderly.current_room:
+            elderly_detail["current_room"] = {
+                "id": str(elderly.current_room.id),
+                "room_number": elderly.current_room.room_number,
+                "floor": elderly.current_room.floor,
+                "capacity": elderly.current_room.capacity,
+                "rent": elderly.current_room.rent,
+                "maintenance": elderly.current_room.maintenance,
+                "service": elderly.current_room.service,
+                "note": elderly.current_room.note,
+                "building": {
+                    "id": str(elderly.current_room.building.id),
+                    "name": elderly.current_room.building.name,
+                    "address": elderly.current_room.building.address,
+                    "resident_type": elderly.current_room.building.resident_type
+                } if elderly.current_room.building else None
+            }
+        
+        return elderly_detail
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"高齢者詳細情報の取得中にエラーが発生しました: {str(e)}")
+
+@router.post("/", status_code=201)
+def create_elderly(
+    elderly_data: ElderlyCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """새로운 고령자 정보 생성"""
+    try:
+        # birth_date가 문자열인 경우 date 객체로 변환
+        birth_date = elderly_data.birth_date
+        if isinstance(birth_date, str):
+            birth_date = datetime.strptime(birth_date, "%Y-%m-%d").date()
+        
+        # current_room_id가 문자열인 경우 UUID로 변환
+        current_room_id = elderly_data.current_room_id
+        if isinstance(current_room_id, str) and current_room_id:
+            current_room_id = uuid.UUID(current_room_id)
+        
+        # 방이 지정된 경우 방 존재 여부 확인
+        if current_room_id:
+            room = db.query(Room).filter(Room.id == current_room_id).first()
+            if not room:
+                raise HTTPException(status_code=404, detail="指定された部屋が見つかりません")
+            
+            # 방이 사용 가능한지 확인
+            if not room.is_available:
+                raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
+        
+        # 새로운 고령자 객체 생성
+        new_elderly = Elderly(
+            id=uuid.uuid4(),
+            name=elderly_data.name,
+            email=elderly_data.email,
+            phone=elderly_data.phone,
+            avatar=elderly_data.avatar or "/src/assets/images/avatars/avatar-1.png",
+            name_katakana=elderly_data.name_katakana,
+            gender=elderly_data.gender,
+            birth_date=birth_date,
+            status=elderly_data.status or "ACTIVE",
+            current_room_id=current_room_id,
+            care_level=elderly_data.care_level
+        )
+        
+        db.add(new_elderly)
+        db.commit()
+        db.refresh(new_elderly)
+        
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="elderly",
+                record_id=str(new_elderly.id),
+                action="CREATE",
+                user_id=current_user["id"] if current_user else None,
+                new_values={
+                    "name": new_elderly.name,
+                    "email": new_elderly.email,
+                    "phone": new_elderly.phone,
+                    "name_katakana": new_elderly.name_katakana,
+                    "gender": new_elderly.gender,
+                    "birth_date": new_elderly.birth_date.strftime("%Y-%m-%d") if new_elderly.birth_date else None,
+                    "status": new_elderly.status,
+                    "current_room_id": str(new_elderly.current_room_id) if new_elderly.current_room_id else None,
+                    "care_level": new_elderly.care_level
+                },
+                changed_fields=["name", "email", "phone", "name_katakana", "gender", "birth_date", "status", "current_room_id", "care_level"],
+                note=f"新規高齢者登録 - {new_elderly.name}"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": "高齢者情報が正常に登録されました",
+            "elderly": {
+                "id": str(new_elderly.id),
+                "name": new_elderly.name,
+                "email": new_elderly.email,
+                "phone": new_elderly.phone,
+                "avatar": new_elderly.avatar,
+                "name_katakana": new_elderly.name_katakana,
+                "gender": new_elderly.gender,
+                "birth_date": new_elderly.birth_date.strftime("%Y-%m-%d") if new_elderly.birth_date else None,
+                "status": new_elderly.status,
+                "current_room_id": str(new_elderly.current_room_id) if new_elderly.current_room_id else None,
+                "care_level": new_elderly.care_level,
+                "created_at": new_elderly.created_at.strftime("%Y-%m-%d %H:%M:%S") if new_elderly.created_at else None
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"高齢者情報登録中にエラーが発生しました: {str(e)}")
+
+@router.put("/{elderly_id}/update")
+def update_elderly(
+    elderly_id: str,
+    elderly_update: ElderlyUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """고령자 정보 수정"""
+    try:
+        # 고령자 존재 여부 확인
+        elderly = db.query(Elderly).filter(Elderly.id == elderly_id).first()
+        if not elderly:
+            raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+        
+        # 기존 값 저장 (로그용)
+        old_values = {
+            "name": elderly.name,
+            "email": elderly.email,
+            "phone": elderly.phone,
+            "name_katakana": elderly.name_katakana,
+            "gender": elderly.gender,
+            "birth_date": elderly.birth_date.strftime("%Y-%m-%d") if elderly.birth_date else None,
+            "status": elderly.status,
+            "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
+            "care_level": elderly.care_level,
+            "note": elderly.note
+        }
+        
+        # 업데이트할 필드만 변경
+        update_data = elderly_update.dict(exclude_unset=True)
+        changed_fields = []
+        
+        for field, value in update_data.items():
+            if value is not None:
+                # current_room_id 검증
+                if field == "current_room_id" and value:
+                    room = db.query(Room).filter(Room.id == value).first()
+                    if not room:
+                        raise HTTPException(status_code=404, detail="指定された部屋が見つかりません")
+                    if not room.is_available:
+                        raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
+                
+                setattr(elderly, field, value)
+                changed_fields.append(field)
+        
+        db.commit()
+        db.refresh(elderly)
+        
+        # 데이터베이스 로그 생성
+        if changed_fields:
+            try:
+                new_values = {
+                    field: getattr(elderly, field).strftime("%Y-%m-%d") if isinstance(getattr(elderly, field), date) 
+                           else str(getattr(elderly, field)) if getattr(elderly, field) is not None 
+                           else None
+                    for field in changed_fields
+                }
+                
+                create_database_log(
+                    db=db,
+                    table_name="elderly",
+                    record_id=str(elderly.id),
+                    action="UPDATE",
+                    user_id=current_user["id"] if current_user else None,
+                    old_values={k: v for k, v in old_values.items() if k in changed_fields},
+                    new_values=new_values,
+                    changed_fields=changed_fields,
+                    note=f"高齢者情報更新 - {elderly.name}"
+                )
+            except Exception as log_error:
+                print(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": "高齢者情報が正常に更新されました",
+            "elderly": {
+                "id": str(elderly.id),
+                "name": elderly.name,
+                "email": elderly.email,
+                "phone": elderly.phone,
+                "avatar": elderly.avatar,
+                "name_katakana": elderly.name_katakana,
+                "gender": elderly.gender,
+                "birth_date": elderly.birth_date.strftime("%Y-%m-%d") if elderly.birth_date else None,
+                "status": elderly.status,
+                "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
+                "care_level": elderly.care_level,
+                "created_at": elderly.created_at.strftime("%Y-%m-%d %H:%M:%S") if elderly.created_at else None
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"高齢者情報更新中にエラーが発生しました: {str(e)}")
 
 
 @router.get("/meal-records/monthly/{building_id}")
@@ -958,3 +1306,486 @@ def create_elderly_meal_record(
             status_code=500,
             detail=f"식사 기록 등록 중 오류가 발생했습니다: {str(e)}"
         )
+
+@router.get("/{elderly_id}/residence-history")
+def get_elderly_residence_history(
+    elderly_id: str,
+    page: int = Query(1, description="페이지 번호", ge=1),
+    size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    is_active: Optional[bool] = Query(None, description="활성 상태로 필터링"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """고령자 거주 이력 조회"""
+    try:
+        # 고령자 존재 여부 확인
+        elderly = db.query(Elderly).filter(Elderly.id == elderly_id).first()
+        if not elderly:
+            raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+
+        # 해당 고령자의 모든 거주 기록 조회
+        query = db.query(Resident).options(
+            joinedload(Resident.room).joinedload(Room.building)
+        ).filter(
+            Resident.resident_id == elderly_id,
+            Resident.resident_type == "elderly"
+        )
+
+        # 활성 상태 필터링 (선택사항)
+        if is_active is not None:
+            query = query.filter(Resident.is_active == is_active)
+
+        # 전체 항목 수 계산
+        total_count = query.count()
+
+        # 페이지네이션 적용 (최신 기록부터)
+        residents = query.order_by(Resident.created_at.desc()).offset((page - 1) * size).limit(size).all()
+
+        # 전체 페이지 수 계산
+        total_pages = (total_count + size - 1) // size
+
+        # 응답 데이터 준비
+        result = []
+        for resident in residents:
+            resident_data = {
+                "id": str(resident.id),
+                "room_id": str(resident.room_id),
+                "elderly_id": str(resident.resident_id),
+                "check_in_date": resident.check_in_date.strftime("%Y-%m-%d") if resident.check_in_date else None,
+                "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
+                "is_active": resident.is_active,
+                "note": resident.note,
+                "created_at": resident.created_at.strftime("%Y-%m-%d %H:%M:%S") if resident.created_at else None,
+                "updated_at": resident.updated_at.strftime("%Y-%m-%d %H:%M:%S") if resident.updated_at else None,
+                "room": {
+                    "id": str(resident.room.id),
+                    "room_number": resident.room.room_number,
+                    "building_id": str(resident.room.building_id),
+                    "floor": resident.room.floor,
+                    "rent": resident.room.rent,
+                    "maintenance": resident.room.maintenance,
+                    "service": resident.room.service
+                } if resident.room else None,
+                "building": {
+                    "id": str(resident.room.building.id),
+                    "name": resident.room.building.name,
+                    "address": resident.room.building.address
+                } if resident.room and resident.room.building else None,
+                "elderly": {
+                    "id": str(elderly.id),
+                    "name": elderly.name,
+                    "name_katakana": elderly.name_katakana,
+                    "phone": elderly.phone,
+                    "email": elderly.email,
+                    "avatar": elderly.avatar,
+                    "gender": elderly.gender,
+                    "birth_date": elderly.birth_date.strftime("%Y-%m-%d") if elderly.birth_date else None,
+                    "care_level": elderly.care_level
+                }
+            }
+            result.append(resident_data)
+
+        return {
+            "elderly": {
+                "id": str(elderly.id),
+                "name": elderly.name,
+                "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None
+            },
+            "items": result,
+            "total": total_count,
+            "total_pages": total_pages,
+            "current_page": page
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"高齢者居住履歴の取得中にエラーが発生しました: {str(e)}")
+
+@router.get("/{elderly_id}/residence-history/monthly")
+def get_elderly_monthly_residence_history(
+    elderly_id: str,
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """고령자 월별 거주 이력 조회"""
+    try:
+        # 고령자 존재 여부 확인
+        elderly = db.query(Elderly).filter(Elderly.id == elderly_id).first()
+        if not elderly:
+            raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+        
+        # 년월 유효성 검사
+        if not (1 <= month <= 12):
+            raise HTTPException(status_code=400, detail="月は1-12の間でなければなりません")
+        
+        # 해당 월의 시작일과 종료일 계산
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+
+        # 해당 월에 거주 기록이 있는 모든 레코드 조회
+        # (입주일이 해당 월에 있거나, 퇴실일이 해당 월에 있거나, 또는 해당 월 전체를 거주한 경우)
+        residents = db.query(Resident).options(
+            joinedload(Resident.room).joinedload(Room.building)
+        ).filter(
+            Resident.resident_id == elderly_id,
+            Resident.resident_type == "elderly",
+            # 입주일이 해당 월에 있거나
+            (Resident.check_in_date <= end_date) &
+            # 퇴실일이 없거나(현재 거주 중) 퇴실일이 해당 월 이후이거나
+            ((Resident.check_out_date.is_(None)) | (Resident.check_out_date >= start_date))
+        ).order_by(Resident.check_in_date.desc()).all()
+
+        # 월별 거주 이력 정리
+        monthly_history = []
+        
+        for resident in residents:
+            # 해당 월에 실제로 거주했는지 확인
+            check_in = resident.check_in_date
+            check_out = resident.check_out_date or end_date  # 퇴실일이 없으면 월말까지
+            
+            # 거주 기간이 해당 월과 겹치는지 확인
+            if check_in <= end_date and check_out >= start_date:
+                # 실제 거주 시작일과 종료일 계산
+                actual_check_in = max(check_in, start_date)
+                actual_check_out = min(check_out, end_date)
+                
+                # 거주 일수 계산
+                days_resided = (actual_check_out - actual_check_in).days + 1
+                
+                resident_data = {
+                    "id": str(resident.id),
+                    "room_id": str(resident.room_id),
+                    "elderly_id": str(resident.resident_id),
+                    "check_in_date": resident.check_in_date.strftime("%Y-%m-%d") if resident.check_in_date else None,
+                    "check_out_date": resident.check_out_date.strftime("%Y-%m-%d") if resident.check_out_date else None,
+                    "is_active": resident.is_active,
+                    "note": resident.note,
+                    "created_at": resident.created_at.strftime("%Y-%m-%d %H:%M:%S") if resident.created_at else None,
+                    "updated_at": resident.updated_at.strftime("%Y-%m-%d %H:%M:%S") if resident.updated_at else None,
+                    "actual_check_in": actual_check_in.strftime("%Y-%m-%d"),
+                    "actual_check_out": actual_check_out.strftime("%Y-%m-%d"),
+                    "days_resided": days_resided,
+                    "room": {
+                        "id": str(resident.room.id),
+                        "room_number": resident.room.room_number,
+                        "building_id": str(resident.room.building_id),
+                        "floor": resident.room.floor,
+                        "rent": resident.room.rent,
+                        "maintenance": resident.room.maintenance,
+                        "service": resident.room.service
+                    } if resident.room else None,
+                    "building": {
+                        "id": str(resident.room.building.id),
+                        "name": resident.room.building.name,
+                        "address": resident.room.building.address
+                    } if resident.room and resident.room.building else None,
+                    "elderly": {
+                        "id": str(elderly.id),
+                        "name": elderly.name,
+                        "name_katakana": elderly.name_katakana,
+                        "phone": elderly.phone,
+                        "email": elderly.email,
+                        "avatar": elderly.avatar,
+                        "gender": elderly.gender,
+                        "birth_date": elderly.birth_date.strftime("%Y-%m-%d") if elderly.birth_date else None,
+                        "care_level": elderly.care_level
+                    }
+                }
+                monthly_history.append(resident_data)
+
+        # 월별 요약 정보
+        total_days = calendar.monthrange(year, month)[1]
+        total_residences = len(monthly_history)
+        
+        return {
+            "elderly": {
+                "id": str(elderly.id),
+                "name": elderly.name,
+                "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None
+            },
+            "year": year,
+            "month": month,
+            "total_days": total_days,
+            "total_residences": total_residences,
+            "items": monthly_history
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"高齢者月別居住履歴の取得中にエラーが発生しました: {str(e)}")
+
+@router.put("/{elderly_id}/change-residence")
+def change_elderly_residence(
+    elderly_id: str,
+    request: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """고령자 거주지 변경"""
+    try:
+        # 고령자 존재 여부 확인
+        elderly = db.query(Elderly).filter(Elderly.id == elderly_id).first()
+        if not elderly:
+            raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+
+        # 현재 거주 중인 방 확인
+        current_residence = db.query(Resident).filter(
+            Resident.resident_id == elderly_id,
+            Resident.resident_type == "elderly",
+            Resident.is_active == True,
+            Resident.check_out_date.is_(None)
+        ).first()
+
+        if not current_residence:
+            raise HTTPException(status_code=400, detail="該当の高齢者は現在居住中の部屋がありません")
+
+        # 퇴실만 처리하는 경우 (new_room_id가 None)
+        if request.get("new_room_id") is None:
+            # 현재 거주지에서 퇴실 처리
+            change_date = datetime.strptime(request.get("change_date", datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+            current_residence.check_out_date = change_date
+            current_residence.is_active = False
+            if request.get("note"):
+                current_residence.note = f"退去 - {request.get('note')}"
+            else:
+                current_residence.note = "退去"
+
+            # 고령자의 current_room_id 초기화
+            elderly.current_room_id = None
+            
+            db.commit()
+            
+            # 데이터베이스 로그 생성
+            try:
+                create_database_log(
+                    db=db,
+                    table_name="residents",
+                    record_id=str(current_residence.id),
+                    action="UPDATE",
+                    user_id=current_user["id"] if current_user else None,
+                    old_values={"is_active": True, "check_out_date": None},
+                    new_values={"is_active": False, "check_out_date": change_date.strftime("%Y-%m-%d")},
+                    changed_fields=["is_active", "check_out_date"],
+                    note=f"高齢者退去 - {elderly.name}: {current_residence.room.room_number if current_residence.room else 'Unknown'}"
+                )
+            except Exception as log_error:
+                print(f"로그 생성 중 오류: {log_error}")
+            
+            return {
+                "message": "高齢者が正常に退去しました",
+                "elderly_id": str(elderly_id),
+                "old_room_id": str(current_residence.room_id),
+                "new_room_id": None,
+                "change_date": change_date.strftime("%Y-%m-%d"),
+                "action": "CHECK_OUT"
+            }
+
+        # 이사 처리하는 경우 (new_room_id가 제공됨)
+        else:
+            # 새로운 방 존재 여부 확인
+            new_room = db.query(Room).filter(Room.id == request.get("new_room_id")).first()
+            if not new_room:
+                raise HTTPException(status_code=404, detail="新しい部屋が見つかりません")
+
+            # 새로운 방이 사용 가능한지 확인
+            if not new_room.is_available:
+                raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
+
+            # 새로운 방의 정원 확인
+            current_residents_in_new_room = db.query(Resident).filter(
+                Resident.room_id == request.get("new_room_id"),
+                Resident.is_active == True,
+                Resident.check_out_date.is_(None)
+            ).count()
+            
+            if new_room.capacity and current_residents_in_new_room >= new_room.capacity:
+                raise HTTPException(status_code=400, detail="該当の部屋は定員を超えて入居できません")
+
+            # 1. 현재 거주지에서 퇴실 처리 (이사할 때는 전날에 퇴실)
+            change_date_obj = datetime.strptime(request.get("change_date", datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+            current_residence.check_out_date = change_date_obj - timedelta(days=1)
+            current_residence.is_active = False
+            if request.get("note"):
+                current_residence.note = f"引越しによる退去 - {request.get('note')}"
+
+            # 2. 새로운 방에 입주 기록 생성
+            check_in_date = change_date_obj  # 변경날짜로 설정
+            
+            new_residence = Resident(
+                id=str(uuid.uuid4()),
+                room_id=request.get("new_room_id"),
+                resident_id=elderly_id,
+                resident_type="elderly",
+                check_in_date=check_in_date,
+                note=f"引越しによる入居 - {request.get('note')}" if request.get('note') else "引越しによる入居"
+            )
+            db.add(new_residence)
+
+            # 3. 고령자의 current_room_id 업데이트
+            elderly.current_room_id = request.get("new_room_id")
+            
+            db.commit()
+            
+            # 데이터베이스 로그 생성
+            try:
+                # 퇴실 로그
+                create_database_log(
+                    db=db,
+                    table_name="residents",
+                    record_id=str(current_residence.id),
+                    action="UPDATE",
+                    user_id=current_user["id"] if current_user else None,
+                    old_values={"is_active": True, "check_out_date": None},
+                    new_values={"is_active": False, "check_out_date": (change_date_obj - timedelta(days=1)).strftime("%Y-%m-%d")},
+                    changed_fields=["is_active", "check_out_date"],
+                    note=f"高齢者引越し退去 - {elderly.name}: {current_residence.room.room_number if current_residence.room else 'Unknown'}"
+                )
+                
+                # 입주 로그
+                create_database_log(
+                    db=db,
+                    table_name="residents",
+                    record_id=str(new_residence.id),
+                    action="CREATE",
+                    user_id=current_user["id"] if current_user else None,
+                    new_values={
+                        "room_id": str(new_residence.room_id),
+                        "resident_id": str(elderly_id),
+                        "resident_type": "elderly",
+                        "check_in_date": check_in_date.strftime("%Y-%m-%d"),
+                        "is_active": True
+                    },
+                    changed_fields=["room_id", "resident_id", "resident_type", "check_in_date", "is_active"],
+                    note=f"高齢者引越し入居 - {elderly.name}: {new_room.room_number}"
+                )
+            except Exception as log_error:
+                print(f"로그 생성 중 오류: {log_error}")
+            
+            return {
+                "message": "高齢者の居住地が正常に変更されました",
+                "elderly_id": str(elderly_id),
+                "old_room_id": str(current_residence.room_id),
+                "new_room_id": str(request.get("new_room_id")),
+                "change_date": change_date_obj.strftime("%Y-%m-%d"),
+                "action": "MOVE"
+            }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"居住地変更中にエラーが発生しました: {str(e)}")
+
+@router.post("/{elderly_id}/create-residence")
+def create_new_elderly_residence(
+    elderly_id: str,
+    request: NewResidenceRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """고령자에게 새로운 거주 기록을 추가"""
+    try:
+        # 고령자 존재 여부 확인
+        elderly = db.query(Elderly).filter(Elderly.id == elderly_id).first()
+        if not elderly:
+            raise HTTPException(status_code=404, detail="高齢者が見つかりません")
+
+        # 방 존재 여부 확인
+        room = db.query(Room).filter(Room.id == request.new_room_id).first()
+        if not room:
+            raise HTTPException(status_code=404, detail="部屋が見つかりません")
+
+        # 방이 사용 가능한지 확인
+        if not room.is_available:
+            raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
+
+        # 입주일과 퇴실일 유효성 검사
+        try:
+            check_in_date = datetime.strptime(request.change_date, "%Y-%m-%d").date()
+            check_out_date = None
+            if request.check_out_date:
+                check_out_date = datetime.strptime(request.check_out_date, "%Y-%m-%d").date()
+                if check_out_date <= check_in_date:
+                    raise HTTPException(status_code=400, detail="退去日は入居日より後でなければなりません")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日付形式が正しくありません (YYYY-MM-DD)")
+
+        # 현재 거주 중인지 확인 (퇴실일이 없는 경우)
+        is_currently_residing = check_out_date is None
+        
+        # 현재 거주 중인 경우, 해당 방의 정원 확인
+        if is_currently_residing:
+            current_residents = db.query(Resident).filter(
+                Resident.room_id == request.new_room_id,
+                Resident.is_active == True,
+                Resident.check_out_date.is_(None)
+            ).count()
+            
+            # 방에 정원이 설정되어 있고, 현재 거주자 수가 정원에 도달한 경우
+            if room.capacity and current_residents >= room.capacity:
+                raise HTTPException(status_code=400, detail=f"該当の部屋は定員({room.capacity}名)を超えて入居できません。現在の居住者: {current_residents}名")
+
+        # 거주 기록 생성
+        new_residence = Resident(
+            id=str(uuid.uuid4()),
+            room_id=request.new_room_id,
+            resident_id=elderly_id,
+            resident_type="elderly",  # 명시적으로 elderly 타입 설정
+            check_in_date=check_in_date,
+            check_out_date=check_out_date,
+            is_active=is_currently_residing,
+            note=request.note
+        )
+        db.add(new_residence)
+
+        # 현재 거주 중인 경우 고령자의 current_room_id 업데이트
+        if is_currently_residing:
+            elderly.current_room_id = request.new_room_id
+        
+        db.commit()
+        
+        # 데이터베이스 로그 생성
+        try:
+            create_database_log(
+                db=db,
+                table_name="residents",
+                record_id=str(new_residence.id),
+                action="CREATE",
+                user_id=current_user["id"] if current_user else None,
+                new_values={
+                    "room_id": str(request.new_room_id),
+                    "resident_id": elderly_id,
+                    "resident_type": "elderly",
+                    "check_in_date": check_in_date.strftime("%Y-%m-%d"),
+                    "check_out_date": check_out_date.strftime("%Y-%m-%d") if check_out_date else None,
+                    "is_active": is_currently_residing,
+                    "note": request.note
+                },
+                changed_fields=["room_id", "resident_id", "resident_type", "check_in_date", "check_out_date", "is_active", "note"],
+                note=f"新規居住記録追加 - {elderly.name}: {room.room_number} ({room.building.name if room.building else 'Unknown'})"
+            )
+        except Exception as log_error:
+            print(f"로그 생성 중 오류: {log_error}")
+        
+        return {
+            "message": "新しい居住記録が正常に追加されました",
+            "elderly_id": elderly_id,
+            "room_id": str(request.new_room_id),
+            "check_in_date": check_in_date.strftime("%Y-%m-%d"),
+            "check_out_date": check_out_date.strftime("%Y-%m-%d") if check_out_date else None,
+            "is_active": is_currently_residing,
+            "residence": {
+                "id": str(new_residence.id),
+                "room_id": str(new_residence.room_id),
+                "elderly_id": str(elderly_id),
+                "check_in_date": check_in_date.strftime("%Y-%m-%d"),
+                "check_out_date": check_out_date.strftime("%Y-%m-%d") if check_out_date else None,
+                "is_active": is_currently_residing,
+                "note": request.note
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"居住記録追加中にエラーが発生しました: {str(e)}")

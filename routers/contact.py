@@ -429,7 +429,7 @@ async def create_contact_with_photos(
             
             # contact_type 한국어 매핑
             contact_type_map = {
-                "defect": "欠陥",
+                "defect": "故障",
                 "claim": "クレーム", 
                 "other": "その他"
             }

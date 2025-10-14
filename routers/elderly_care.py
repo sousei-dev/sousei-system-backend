@@ -22,19 +22,7 @@ def get_care_items(db: Session = Depends(get_db)):
     try:
         care_items = db.query(CareItem).all()
         
-        result = []
-        for item in care_items:
-            item_data = {
-                "id": str(item.id),
-                "item_name": item.item_name,
-                "description": item.description,
-                "category": item.category,
-                "is_active": item.is_active,
-                "created_at": item.created_at
-            }
-            result.append(item_data)
-        
-        return result
+        return care_items
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"케어 항목 조회 중 오류가 발생했습니다: {str(e)}")
@@ -44,20 +32,7 @@ def get_care_meal_prices(db: Session = Depends(get_db)):
     """케어 식사 가격 목록 조회"""
     try:
         meal_prices = db.query(CareMealPrice).all()
-        
-        result = []
-        for price in meal_prices:
-            price_data = {
-                "id": str(price.id),
-                "meal_type": price.meal_type,
-                "price": price.price,
-                "description": price.description,
-                "is_active": price.is_active,
-                "created_at": price.created_at
-            }
-            result.append(price_data)
-        
-        return result
+        return meal_prices
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"케어 식사 가격 조회 중 오류가 발생했습니다: {str(e)}")
@@ -90,14 +65,7 @@ def create_care_meal_price(
         db.commit()
         db.refresh(new_meal_price)
         
-        return {
-            "id": str(new_meal_price.id),
-            "meal_type": new_meal_price.meal_type,
-            "price": new_meal_price.price,
-            "description": new_meal_price.description,
-            "is_active": new_meal_price.is_active,
-            "created_at": new_meal_price.created_at
-        }
+        return new_meal_price
         
     except Exception as e:
         db.rollback()
@@ -123,14 +91,7 @@ def update_care_meal_price(
         db.commit()
         db.refresh(meal_price)
         
-        return {
-            "id": str(meal_price.id),
-            "meal_type": meal_price.meal_type,
-            "price": meal_price.price,
-            "description": meal_price.description,
-            "is_active": meal_price.is_active,
-            "created_at": meal_price.created_at
-        }
+        return meal_price
         
     except Exception as e:
         db.rollback()
@@ -161,20 +122,7 @@ def get_care_utility_prices(db: Session = Depends(get_db)):
     """케어 유틸리티 가격 목록 조회"""
     try:
         utility_prices = db.query(CareUtilityPrice).all()
-        
-        result = []
-        for price in utility_prices:
-            price_data = {
-                "id": str(price.id),
-                "utility_type": price.utility_type,
-                "price": price.price,
-                "description": price.description,
-                "is_active": price.is_active,
-                "created_at": price.created_at
-            }
-            result.append(price_data)
-        
-        return result
+        return utility_prices
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"케어 유틸리티 가격 조회 중 오류가 발생했습니다: {str(e)}")
@@ -207,14 +155,7 @@ def create_care_utility_price(
         db.commit()
         db.refresh(new_utility_price)
         
-        return {
-            "id": str(new_utility_price.id),
-            "utility_type": new_utility_price.utility_type,
-            "price": new_utility_price.price,
-            "description": new_utility_price.description,
-            "is_active": new_utility_price.is_active,
-            "created_at": new_utility_price.created_at
-        }
+        return new_utility_price
         
     except Exception as e:
         db.rollback()
@@ -240,14 +181,7 @@ def update_care_utility_price(
         db.commit()
         db.refresh(utility_price)
         
-        return {
-            "id": str(utility_price.id),
-            "utility_type": utility_price.utility_type,
-            "price": utility_price.price,
-            "description": utility_price.description,
-            "is_active": utility_price.is_active,
-            "created_at": utility_price.created_at
-        }
+        return utility_price
         
     except Exception as e:
         db.rollback()

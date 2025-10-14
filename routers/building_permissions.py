@@ -302,7 +302,7 @@ def get_my_accessible_buildings(
     try:
         # admin, manager는 모든 빌딩 조회
         if current_user.get("role") in ["admin", "manager"]:
-            buildings = db.query(Building).order_by(Building.name.asc()).all()
+            buildings = db.query(Building).order_by(Building.name.asc()).filter(Building.resident_type == "elderly").all()
             
             buildings_list = []
             for building in buildings:

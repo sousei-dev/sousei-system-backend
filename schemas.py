@@ -674,6 +674,7 @@ class ElderlyCreate(BaseModel):
     status: Optional[str] = Field("ACTIVE", example="ACTIVE")
     current_room_id: Optional[Union[UUID, str]] = Field(None, example="room-uuid")
     care_level: Optional[str] = Field(None, example="要介護1")
+    note: Optional[str] = Field(None, example="備考")
 
     @field_validator('current_room_id', mode='before')
     @classmethod
@@ -707,6 +708,7 @@ class ElderlyUpdate(BaseModel):
     status: Optional[str] = None
     current_room_id: Optional[UUID] = None
     care_level: Optional[str] = None
+    note: Optional[str] = None
 
 class ElderlyResponse(BaseModel):
     id: str
@@ -843,7 +845,7 @@ class ElderlyInvoiceResponse(BaseModel):
         }
 
 class CareItemResponse(BaseModel):
-    id: int
+    id: UUID
     name: str
     category: Optional[str] = None
     price: Optional[int] = None
@@ -854,6 +856,9 @@ class CareItemResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        json_encoders = {
+            UUID: str
+        }
 
 
 class CareMealPriceCreate(BaseModel):

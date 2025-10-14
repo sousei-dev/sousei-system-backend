@@ -468,8 +468,8 @@ class ElderlyInvoice(Base):
 class CareItem(Base):
     __tablename__ = "care_items"
 
-    id = Column(Integer, primary_key=True)
-    name = Column(Text, nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False)  # DB 컬럼명은 item_name
     category = Column(Text, nullable=True)
     price = Column(Integer, nullable=True)
     unit = Column(Text, nullable=True)
