@@ -126,6 +126,14 @@ def get_elderly(
                 else:
                     hospitalization_status = "正常"
         
+        # 현재 거주 기록에서 입주일 조회
+        current_resident = db.query(Resident).filter(
+            Resident.resident_id == elderly.id,
+            Resident.resident_type == "elderly",
+            Resident.is_active == True,
+            Resident.check_out_date.is_(None)
+        ).first()
+        
         elderly_dict = {
         "id": str(elderly.id),
         "name": elderly.name,
@@ -139,6 +147,7 @@ def get_elderly(
             "status": elderly.status,
             "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
             "care_level": elderly.care_level,
+            "check_in_date": current_resident.check_in_date if current_resident else None,
             "hospitalization_status": hospitalization_status,
             "latest_hospitalization": {
                 "id": str(latest_hospitalization.id),
