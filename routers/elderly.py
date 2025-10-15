@@ -1798,3 +1798,138 @@ def create_new_elderly_residence(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"居住記録追加中にエラーが発生しました: {str(e)}")
+
+@router.get("/buildings/{building_id}/statistics")
+def get_building_elderly_statistics(
+    building_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """특정 빌딩의 고령자 통계 조회 (입원자 수 등)"""
+    try:
+        # 빌딩 존재 여부 확인
+        building = db.query(Building).filter(Building.id == building_id).first()
+        if not building:
+            raise HTTPException(status_code=404, detail="建物が見つかりません")
+        
+        # 해당 빌딩의 활성 고령자 거주자 조회
+        elderly_residents = db.query(Resident).options(
+            joinedload(Resident.elderly).joinedload(Elderly.hospitalizations),
+            joinedload(Resident.room)
+        ).filter(
+            Resident.resident_type == "elderly",
+            Resident.is_active == True,
+            Resident.check_out_date.is_(None),
+            Resident.room.has(Room.building_id == building_id)
+        ).all()
+        
+        total_residents = len(elderly_residents)
+        hospitalized_count = 0
+        hospitalized_residents = []
+        
+        # 통계를 위한 데이터 수집
+        care_level_distribution = {}
+        age_distribution = {
+            "60-69": 0,
+            "70-79": 0,
+            "80-89": 0,
+            "90-99": 0,
+            "100+": 0
+        }
+        gender_distribution = {
+            "男": 0,
+            "女": 0,
+            "その他": 0
+        }
+        
+        # 각 거주자의 입원 상태 확인 및 통계 데이터 수집
+        for resident in elderly_residents:
+            if not resident.elderly:
+                continue
+            
+            elderly = resident.elderly
+            
+            # 요양 등급별 분포
+            care_level = elderly.care_level or "未設定"
+            care_level_distribution[care_level] = care_level_distribution.get(care_level, 0) + 1
+            
+            # 연령대별 분포
+            if elderly.birth_date:
+                age = (date.today() - elderly.birth_date).days // 365
+                if 60 <= age < 70:
+                    age_distribution["60-69"] += 1
+                elif 70 <= age < 80:
+                    age_distribution["70-79"] += 1
+                elif 80 <= age < 90:
+                    age_distribution["80-89"] += 1
+                elif 90 <= age < 100:
+                    age_distribution["90-99"] += 1
+                elif age >= 100:
+                    age_distribution["100+"] += 1
+            
+            # 성별 분포
+            if elderly.gender == "男":
+                gender_distribution["男"] += 1
+            elif elderly.gender == "女":
+                gender_distribution["女"] += 1
+            else:
+                gender_distribution["その他"] += 1
+            
+            # 입원 기록 확인
+            if elderly.hospitalizations:
+                # 입원 기록과 퇴원 기록 분리
+                admission_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'admission']
+                discharge_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'discharge']
+                
+                is_hospitalized = False
+                latest_admission = None
+                
+                if admission_records and not discharge_records:
+                    # 입원 기록만 있고 퇴원 기록이 없으면 입원중
+                    is_hospitalized = True
+                    latest_admission = max(admission_records, key=lambda x: x.date)
+                elif admission_records and discharge_records:
+                    # 입원과 퇴원 기록이 모두 있으면 최신 기록 확인
+                    latest_admission_record = max(admission_records, key=lambda x: x.date)
+                    latest_discharge_record = max(discharge_records, key=lambda x: x.date)
+                    
+                    if latest_admission_record.date > latest_discharge_record.date:
+                        is_hospitalized = True
+                        latest_admission = latest_admission_record
+                
+                # 입원 중인 경우 카운트 및 상세 정보 추가
+                if is_hospitalized and latest_admission:
+                    hospitalized_count += 1
+                    hospitalized_residents.append({
+                        "elderly_id": str(elderly.id),
+                        "elderly_name": elderly.name,
+                        "elderly_name_katakana": elderly.name_katakana,
+                        "room_number": resident.room.room_number if resident.room else None,
+                        "care_level": elderly.care_level,
+                        "admission_date": latest_admission.date,
+                        "hospital_name": latest_admission.hospital_name,
+                        "last_meal_date": latest_admission.last_meal_date,
+                        "last_meal_type": latest_admission.last_meal_type,
+                        "note": latest_admission.note
+                    })
+        
+        return {
+            "building_id": building_id,
+            "building_name": building.name,
+            "building_address": building.address,
+            "statistics": {
+                "total_residents": total_residents,
+                "hospitalized_count": hospitalized_count,
+                "non_hospitalized_count": total_residents - hospitalized_count,
+                "hospitalization_rate": round(hospitalized_count / total_residents * 100, 2) if total_residents > 0 else 0,
+                "care_level_distribution": care_level_distribution,
+                "age_distribution": age_distribution,
+                "gender_distribution": gender_distribution
+            },
+            "hospitalized_residents": hospitalized_residents
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"建物統計の取得中にエラーが発生しました: {str(e)}")
