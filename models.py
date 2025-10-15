@@ -390,7 +390,7 @@ class Elderly(Base):
     status = Column(String, default='ACTIVE')
     current_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"))
     care_level = Column(String)
-    categories_id = Column(Integer, ForeignKey("elderly_categories.id"), nullable=True)
+    categories_id = Column(UUID(as_uuid=True), ForeignKey("elderly_categories.id"), nullable=True)
     note = Column(String)
 
     # 관계 설정
@@ -412,7 +412,7 @@ class BuildingCategoriesRent(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     building_id = Column(UUID(as_uuid=True), ForeignKey("buildings.id", ondelete="CASCADE"), nullable=False)
-    categories_id = Column(Integer, ForeignKey("elderly_categories.id"), nullable=False)
+    categories_id = Column(UUID(as_uuid=True), ForeignKey("elderly_categories.id"), nullable=False)
     monthly_rent = Column(Integer, nullable=False)
 
     # 관계 설정

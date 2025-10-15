@@ -43,7 +43,7 @@ def get_buildings(
     query = db.query(Building)
     
     # 권한 기반 필터링 (admin, manager가 아닌 경우에만 적용)
-    if current_user.get("role") not in ["admin", "manager"]:
+    if current_user.get("role") not in ["admin", "mishima_user"]:
         # 사용자가 접근 가능한 빌딩 ID 조회
         user_permissions = db.query(UserBuildingPermission).filter(
             UserBuildingPermission.user_id == current_user["id"]
@@ -136,8 +136,8 @@ def get_building_options(db: Session = Depends(get_db), current_user: dict = Dep
     try:
         query = db.query(Building).order_by(Building.name.asc())
         
-        # 권한 기반 필터링 (admin, manager가 아닌 경우에만 적용)
-        if current_user.get("role") not in ["admin", "manager"]:
+        # 권한 기반 필터링 (admin, mishima_user가 아닌 경우에만 적용)
+        if current_user.get("role") not in ["admin", "mishima_user"]:
             # 사용자가 접근 가능한 빌딩 ID 조회
             user_permissions = db.query(UserBuildingPermission).filter(
                 UserBuildingPermission.user_id == current_user["id"]
@@ -173,8 +173,8 @@ def get_building_empty_rooms(
 ):
     """특정 빌딩의 빈 호실 목록을 조회 - 권한 체크"""
     try:
-        # 권한 체크 (admin, manager가 아닌 경우)
-        if current_user.get("role") not in ["admin", "manager"]:
+        # 권한 체크 (admin, mishima_user가 아닌 경우)
+        if current_user.get("role") not in ["admin", "mishima_user"]:
             # 해당 빌딩에 대한 권한 확인
             has_permission = db.query(UserBuildingPermission).filter(
                 UserBuildingPermission.user_id == current_user["id"],
@@ -244,8 +244,8 @@ def get_building(
     current_user: dict = Depends(get_current_user)
 ):
     """개별 빌딩 조회 - 권한 체크"""
-    # 권한 체크 (admin, manager가 아닌 경우)
-    if current_user.get("role") not in ["admin", "manager"]:
+    # 권한 체크 (admin, mishima_user가 아닌 경우)
+    if current_user.get("role") not in ["admin", "mishima_user"]:
         # 해당 빌딩에 대한 권한 확인
         has_permission = db.query(UserBuildingPermission).filter(
             UserBuildingPermission.user_id == current_user["id"],
@@ -274,8 +274,8 @@ def get_rooms_by_building(
     current_user: dict = Depends(get_current_user)
 ):
     """빌딩별 방 목록 조회 - 권한 체크"""
-    # 권한 체크 (admin, manager가 아닌 경우)
-    if current_user.get("role") not in ["admin", "manager"]:
+    # 권한 체크 (admin, mishima_user가 아닌 경우)
+    if current_user.get("role") not in ["admin", "mishima_user"]:
         # 해당 빌딩에 대한 권한 확인
         has_permission = db.query(UserBuildingPermission).filter(
             UserBuildingPermission.user_id == current_user["id"],
@@ -335,7 +335,7 @@ def get_rooms_by_building(
         # 해당 빌딩의 BuildingCategoriesRent 정보 조회
         building_status_rent = db.query(BuildingCategoriesRent).filter(
             BuildingCategoriesRent.building_id == room.building_id,
-            BuildingCategoriesRent.categories_id == 1
+            BuildingCategoriesRent.categories_id == 'd7d6625d-b75f-496c-ae06-4718024be703'
         ).first()
       
         if building_status_rent:

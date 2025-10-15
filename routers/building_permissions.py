@@ -301,7 +301,7 @@ def get_my_accessible_buildings(
     """현재 로그인한 사용자가 관리 가능한 빌딩 목록 조회"""
     try:
         # admin, manager는 모든 빌딩 조회
-        if current_user.get("role") in ["admin", "manager"]:
+        if current_user.get("role") in ["admin", "mishima_user"]:
             buildings = db.query(Building).order_by(Building.name.asc()).filter(Building.resident_type == "elderly").all()
             
             buildings_list = []

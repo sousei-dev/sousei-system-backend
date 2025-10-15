@@ -1812,7 +1812,11 @@ def get_building_elderly_statistics(
         if not building:
             raise HTTPException(status_code=404, detail="建物が見つかりません")
         
-        # 해당 빌딩의 활성 고령자 거주자 조회
+        # 해당 빌딩의 전체 방 수 조회
+        total_rooms = db.query(Room).filter(Room.building_id == building_id).count()
+        
+        # 해당 빌딩의 활성 고령자 거주자 조회 (입주예정자 제외 - 입주일이 오늘 이하인 경우만)
+        today = date.today()
         elderly_residents = db.query(Resident).options(
             joinedload(Resident.elderly).joinedload(Elderly.hospitalizations),
             joinedload(Resident.room)
@@ -1820,6 +1824,7 @@ def get_building_elderly_statistics(
             Resident.resident_type == "elderly",
             Resident.is_active == True,
             Resident.check_out_date.is_(None),
+            Resident.check_in_date <= today,  # 입주예정자 제외
             Resident.room.has(Room.building_id == building_id)
         ).all()
         
@@ -1913,11 +1918,25 @@ def get_building_elderly_statistics(
                         "note": latest_admission.note
                     })
         
+        # 입주자가 있는 방 수 계산 (중복 제거)
+        occupied_room_ids = set()
+        for resident in elderly_residents:
+            if resident.room_id:
+                occupied_room_ids.add(resident.room_id)
+        
+        occupied_rooms = len(occupied_room_ids)
+        vacant_rooms = total_rooms - occupied_rooms
+        occupancy_rate = round(occupied_rooms / total_rooms * 100, 2) if total_rooms > 0 else 0
+        
         return {
             "building_id": building_id,
             "building_name": building.name,
             "building_address": building.address,
             "statistics": {
+                "total_rooms": total_rooms,
+                "occupied_rooms": occupied_rooms,
+                "vacant_rooms": vacant_rooms,
+                "occupancy_rate": occupancy_rate,
                 "total_residents": total_residents,
                 "hospitalized_count": hospitalized_count,
                 "non_hospitalized_count": total_residents - hospitalized_count,
