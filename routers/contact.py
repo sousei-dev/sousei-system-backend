@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import Optional, List, Union
 from database import SessionLocal, engine
-from models import Contact, ContactPhoto, ContactComment, Student, Company, Profiles
+from models import Contact, ContactPhoto, ContactComment, Student, Company, Profiles, PushSubscription
 from schemas import ContactCreate, ContactUpdate, ContactResponse, ContactCommentCreate, ContactPhotoCreate
 from datetime import datetime, date, timedelta
 import uuid
@@ -15,6 +15,8 @@ import random
 import string
 from supabase import create_client
 from utils.dependencies import get_current_user
+from pywebpush import webpush, WebPushException
+import json
 
 router = APIRouter(prefix="/contact", tags=["리포트 관리"])
 
@@ -33,6 +35,183 @@ def get_db():
 
 def get_token_header(token: str = Depends(HTTPBearer())):
     return token.credentials
+
+def get_vapid_private_key():
+    """VAPID 개인키를 가져옵니다. (elderly.py와 동일한 방식)"""
+    try:
+        import os
+        
+        # 1. 파일 경로에서 개인키 로드 시도
+        vapid_private_key_path = os.getenv("VAPID_PRIVATE_KEY_PATH", "vapid_private_key.pem")
+        if os.path.exists(vapid_private_key_path):
+            print(f"VAPID 개인키 파일 사용: {vapid_private_key_path}")
+            return vapid_private_key_path
+        
+        # 2. 환경변수에서 직접 가져오기
+        vapid_private_key = os.getenv("VAPID_PRIVATE_KEY")
+        if vapid_private_key:
+            print("환경변수에서 VAPID 개인키 사용")
+            return vapid_private_key
+        
+        print("VAPID 개인키를 찾을 수 없습니다.")
+        return None
+    except Exception as e:
+        print(f"VAPID 개인키 로드 중 오류: {e}")
+        return None
+
+def get_vapid_claims(endpoint: str):
+    """VAPID 클레임을 생성합니다. (elderly.py와 동일한 방식)"""
+    try:
+        from urllib.parse import urlparse
+        
+        parsed_url = urlparse(endpoint)
+        aud = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        claims = {
+            "sub": "mailto:dev@sousei-group.com",
+            "aud": aud
+        }
+        
+        print(f"VAPID 클레임 생성: endpoint={endpoint}, claims={claims}")
+        return claims
+    except Exception as e:
+        print(f"VAPID 클레임 생성 중 오류: {e}")
+        default_claims = {
+            "sub": "mailto:dev@sousei-group.com",
+            "aud": "https://fcm.googleapis.com"  # 기본값
+        }
+        print(f"기본 VAPID 클레임 사용: {default_claims}")
+        return default_claims
+
+async def get_admin_and_mishima_users(db: Session) -> List[str]:
+    """admin과 mishima_user 역할을 가진 사용자 ID 목록을 반환 (elderly.py와 동일)"""
+    try:
+        # Profiles 테이블에서 admin과 mishima_user 역할을 가진 사용자 조회
+        admin_users = db.query(Profiles.id).filter(
+            Profiles.role.in_(["admin", "mishima_user"])
+        ).all()
+        
+        return [str(user.id) for user in admin_users]
+    except Exception as e:
+        print(f"admin/mishima_user 조회 중 오류: {e}")
+        return []
+
+async def send_contact_notification(
+    db: Session, 
+    contact_type: str, 
+    creator_name: str, 
+    contact_id: str,
+    photos_count: int = 0
+):
+    """리포트 생성 웹푸시 알림을 admin과 mishima_user에게 전송"""
+    try:
+        # admin과 mishima_user 조회
+        target_users = await get_admin_and_mishima_users(db)
+        
+        if not target_users:
+            print("알림을 받을 사용자가 없습니다.")
+            return
+        
+        # VAPID 개인키 가져오기
+        vapid_private_key = get_vapid_private_key()
+        if not vapid_private_key:
+            print("VAPID 개인키를 가져올 수 없습니다.")
+            return
+        
+        # 리포트 타입별 일본어 변환
+        contact_type_ja = {
+            "defect": "不具合",
+            "claim": "クレーム", 
+            "other": "その他"
+        }.get(contact_type, contact_type)
+        
+        # 알림 메시지 구성
+        title = "新しいレポート"
+        body = f"{creator_name}が{contact_type_ja}レポートを作成しました"
+        
+        # 각 사용자에게 웹푸시 알림 전송
+        sent_count = 0
+        for user_id in target_users:
+            try:
+                # 사용자의 푸시 구독 정보 조회
+                subscriptions = db.query(PushSubscription).filter(
+                    PushSubscription.user_id == user_id
+                ).all()
+                
+                if not subscriptions:
+                    print(f"사용자 {user_id}의 푸시 구독 정보가 없습니다")
+                    continue
+                
+                # 각 구독에 대해 푸시 알림 전송
+                for subscription in subscriptions:
+                    try:
+                        subscription_info = {
+                            "endpoint": subscription.endpoint,
+                            "keys": {
+                                "p256dh": subscription.p256dh,
+                                "auth": subscription.auth
+                            }
+                        }
+                        
+                        # 푸시 페이로드 생성
+                        push_data = {
+                            "type": "new_contact_report",
+                            "contact_id": contact_id,
+                            "contact_type": contact_type,
+                            "creator_name": creator_name,
+                            "url": f"/contact/{contact_id}",
+                            "photos_count": photos_count
+                        }
+                        
+                        payload = {
+                            "notification": {
+                                "title": title,
+                                "body": body,
+                                "icon": "/static/icons/icon-192x192.png",
+                                "badge": "/static/icons/badge-72x72.png",
+                                "vibrate": [200, 100, 200],
+                                "tag": f"contact-{contact_type}-{datetime.utcnow().timestamp()}",
+                                "requireInteraction": True,
+                                "data": push_data
+                            }
+                        }
+                        
+                        # VAPID 클레임 생성
+                        vapid_claims = get_vapid_claims(subscription.endpoint)
+                        
+                        # 웹푸시 전송
+                        webpush(
+                            subscription_info=subscription_info,
+                            data=json.dumps(payload),
+                            vapid_private_key=vapid_private_key,
+                            vapid_claims=vapid_claims,
+                            ttl=86400,  # 24시간
+                            headers={
+                                "Urgency": "high"
+                            }
+                        )
+                        
+                        print(f"웹푸시 알림 전송 성공: 사용자 {user_id}")
+                        
+                    except WebPushException as ex:
+                        print(f"웹푸시 알림 전송 실패 (사용자: {user_id}, 구독 ID: {subscription.id}): {ex}")
+                        if ex.response and ex.response.status_code == 410:
+                            # 만료된 구독 삭제
+                            db.delete(subscription)
+                            db.commit()
+                            print(f"만료된 구독 삭제: {subscription.id}")
+                    except Exception as e:
+                        print(f"웹푸시 알림 전송 중 오류 (사용자: {user_id}): {e}")
+                
+                sent_count += 1
+                
+            except Exception as e:
+                print(f"사용자 {user_id} 웹푸시 알림 전송 중 오류: {e}")
+        
+        print(f"총 {sent_count}명에게 리포트 생성 웹푸시 알림 전송 완료")
+        
+    except Exception as e:
+        print(f"리포트 생성 웹푸시 알림 전송 중 오류: {e}")
 
 
 
@@ -242,7 +421,7 @@ def get_contact(
         raise HTTPException(status_code=500, detail=f"レポート詳細取得中にエラーが発生しました: {str(e)}")
 
 @router.post("/", status_code=201)
-def create_contact(
+async def create_contact(
     contact: ContactCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -283,6 +462,22 @@ def create_contact(
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
+        
+        # 웹푸시 알림 전송 (리포트 생성 시)
+        try:
+            # 생성자 이름 조회
+            creator_profile = db.query(Profiles).filter(Profiles.id == current_user["id"]).first()
+            creator_name = creator_profile.name if creator_profile else "Unknown"
+            
+            await send_contact_notification(
+                db=db,
+                contact_type=new_contact.contact_type,
+                creator_name=creator_name,
+                contact_id=str(new_contact.id),
+                photos_count=0
+            )
+        except Exception as e:
+            print(f"리포트 알림 전송 중 오류: {e}")
         
         return {
             "message": "리포트가 성공적으로 생성되었습니다",
@@ -418,57 +613,21 @@ async def create_contact_with_photos(
         except Exception as log_error:
             print(f"ログ作成中にエラー: {log_error}")
         
-        # Admin 사용자들에게 Web Push 알림 전송
+        # 웹푸시 알림 전송 (사진과 함께 리포트 생성 시)
         try:
-            # Supabase에서 admin 권한 사용자 조회
-            admin_profiles = supabase.table('profiles').select('id, name, role').eq('role', 'admin').execute()
+            # 생성자 이름 조회
+            creator_profile = db.query(Profiles).filter(Profiles.id == current_user["id"]).first()
+            creator_name = creator_profile.name if creator_profile else "Unknown"
             
-            # 리포트 생성자 정보 조회
-            creator_profile = supabase.table('profiles').select('id, name').eq('id', current_user["id"]).execute()
-            creator_name = creator_profile.data[0].get('name', '사용자') if creator_profile.data else '사용자'
-            
-            # contact_type 한국어 매핑
-            contact_type_map = {
-                "defect": "故障",
-                "claim": "クレーム", 
-                "other": "その他"
-            }
-            contact_type_ja = contact_type_map.get(new_contact.contact_type, new_contact.contact_type)
-            
-            # Admin 사용자들에게 Web Push 전송
-            notified_count = 0
-            if admin_profiles.data:
-                # main.py의 send_push_notification_to_user 함수 import
-                from main import send_push_notification_to_user
-                
-                for admin_user in admin_profiles.data:
-                    admin_user_id = admin_user.get('id')
-                    if admin_user_id != current_user["id"]:  # 본인 제외
-                        try:
-                            # Web Push 알림 전송 (온라인 상태 무시하고 항상 전송)
-                            await send_push_notification_to_user(
-                                user_id=admin_user_id,
-                                title="新しいレポート",
-                                body=f"{creator_name}が{contact_type_ja}レポートを作成しました",
-                                notification_type="new_contact_report",
-                                data={
-                                    "contact_id": str(new_contact.id),
-                                    "contact_type": new_contact.contact_type,
-                                    "creator_name": creator_name,
-                                    "url": f"/contact/{new_contact.id}",
-                                    "photos_count": len(uploaded_photos)
-                                },
-                                force_send=True  # 온라인 상태 무시하고 항상 전송
-                            )
-                            notified_count += 1
-                        except Exception as push_error:
-                            print(f"Admin {admin_user_id}에게 푸시 알림 전송 실패: {push_error}")
-            
-            print(f"[INFO] Admin 사용자 {notified_count}명에게 Web Push 알림 전송 완료")
-            
-        except Exception as notification_error:
-            print(f"[WARNING] Admin 푸시 알림 전송 실패: {notification_error}")
-            # 알림 전송 실패해도 리포트 생성은 성공으로 처리
+            await send_contact_notification(
+                db=db,
+                contact_type=new_contact.contact_type,
+                creator_name=creator_name,
+                contact_id=str(new_contact.id),
+                photos_count=len(uploaded_photos)
+            )
+        except Exception as e:
+            print(f"리포트 알림 전송 중 오류: {e}")
         
         return {
             "message": f"レポートが正常に作成されました。写真{len(uploaded_photos)}枚が添付されました。",
