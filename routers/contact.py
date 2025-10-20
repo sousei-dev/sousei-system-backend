@@ -126,8 +126,8 @@ async def send_contact_notification(
         }.get(contact_type, contact_type)
         
         # 알림 메시지 구성
-        title = "新しいレポート"
-        body = f"{creator_name}が{contact_type_ja}レポートを作成しました"
+        title = "新しい連絡"
+        body = f"{creator_name}が{contact_type_ja}連絡を作成しました"
         
         # 각 사용자에게 웹푸시 알림 전송
         sent_count = 0
@@ -349,7 +349,7 @@ def get_contact(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"レポート一覧取得中にエラーが発生しました: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"連絡一覧取得中にエラーが発生しました: {str(e)}")
 
 @router.get("/{contact_id}")
 def get_contact(
@@ -364,7 +364,7 @@ def get_contact(
         ).filter(Contact.id == contact_id).first()
         
         if not contact:
-            raise HTTPException(status_code=404, detail="レポートが見つかりません")
+            raise HTTPException(status_code=404, detail="連絡が見つかりません")
         
         # creator 정보 조회
         creator = db.query(Profiles).filter(Profiles.id == contact.creator_id).first()
@@ -418,7 +418,7 @@ def get_contact(
         return contact_data
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"レポート詳細取得中にエラーが発生しました: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"連絡詳細取得中にエラーが発生しました: {str(e)}")
 
 @router.post("/", status_code=201)
 async def create_contact(
@@ -458,7 +458,7 @@ async def create_contact(
                     "status": new_contact.status
                 },
                 changed_fields=["creator_id", "occurrence_date", "contact_type", "contact_content", "status"],
-                note=f"新規レポート作成 - {new_contact.contact_type}: {new_contact.contact_content[:50]}..."
+                note=f"新規連絡作成 - {new_contact.contact_type}: {new_contact.contact_content[:50]}..."
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
@@ -630,7 +630,7 @@ async def create_contact_with_photos(
             print(f"리포트 알림 전송 중 오류: {e}")
         
         return {
-            "message": f"レポートが正常に作成されました。写真{len(uploaded_photos)}枚が添付されました。",
+            "message": f"連絡が正常に作成されました。写真{len(uploaded_photos)}枚が添付されました。",
             "contact": {
                 "id": str(new_contact.id),
                 "creator_id": str(new_contact.creator_id),
@@ -658,7 +658,7 @@ def update_contact(
         # 리포트 존재 여부 확인
         contact = db.query(Contact).filter(Contact.id == contact_id).first()
         if not contact:
-            raise HTTPException(status_code=404, detail="レポートが見つかりません")
+            raise HTTPException(status_code=404, detail="連絡が見つかりません")
         
         # 기존 값 저장 (로그용)
         old_values = {
@@ -692,13 +692,13 @@ def update_contact(
                     "status": contact.status
                 },
                 changed_fields=list(update_data.keys()),
-                note=f"レポート情報更新 - {contact.contact_type}: {contact.contact_content[:50]}..."
+                note=f"連絡情報更新 - {contact.contact_type}: {contact.contact_content[:50]}..."
             )
         except Exception as log_error:
             print(f"ログ作成中にエラー: {log_error}")
         
         return {
-            "message": "レポートが正常に更新されました",
+            "message": "連絡が正常に更新されました",
             "contact": {
                 "id": str(contact.id),
                 "creator_id": str(contact.creator_id),
@@ -710,7 +710,7 @@ def update_contact(
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"レポート更新中にエラーが発生しました: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"連絡更新中にエラーが発生しました: {str(e)}")
 
 @router.put("/{contact_id}/cancel")
 def cancel_contact(
@@ -723,11 +723,11 @@ def cancel_contact(
         # 리포트 존재 여부 확인
         contact = db.query(Contact).filter(Contact.id == contact_id).first()
         if not contact:
-            raise HTTPException(status_code=404, detail="レポートが見つかりません")
+            raise HTTPException(status_code=404, detail="連絡が見つかりません")
         
         # 이미 취소된 리포트인지 확인
         if contact.status == "cancel":
-            raise HTTPException(status_code=400, detail="既にキャンセルされたレポートです")
+            raise HTTPException(status_code=400, detail="既にキャンセルされた連絡です")
         
         # 기존 상태 저장 (로그용)
         old_status = contact.status
@@ -749,13 +749,13 @@ def cancel_contact(
                 old_values={"status": old_status},
                 new_values={"status": "cancel"},
                 changed_fields=["status"],
-                note=f"レポートキャンセル - {contact.contact_type}: {contact.contact_content[:50]}... (状態: {old_status} → cancel)"
+                note=f"連絡キャンセル - {contact.contact_type}: {contact.contact_content[:50]}... (状態: {old_status} → cancel)"
             )
         except Exception as log_error:
             print(f"ログ作成中にエラー: {log_error}")
         
         return {
-            "message": "レポートが正常にキャンセルされました",
+            "message": "連絡が正常にキャンセルされました",
             "contact": {
                 "id": str(contact.id),
                 "status": contact.status,
@@ -765,7 +765,7 @@ def cancel_contact(
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"レポートキャンセル中にエラーが発生しました: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"連絡キャンセル中にエラーが発生しました: {str(e)}")
 
 
 # ===== Contact Comments 관련 API들 =====
@@ -787,7 +787,7 @@ def create_contact_comment(
             # 리포트 존재 여부 확인
             contact = db.query(Contact).filter(Contact.id == contact_id).first()
             if not contact:
-                raise HTTPException(status_code=404, detail="レポートが見つかりません")
+                raise HTTPException(status_code=404, detail="連絡が見つかりません")
             
             # comment_type이 상태 값인 경우 보고서 상태만 업데이트
             old_status = contact.status
@@ -813,13 +813,13 @@ def create_contact_comment(
                             old_values={"status": old_status},
                             new_values={"status": contact.status},
                             changed_fields=["status"],
-                            note=f"レポート状態変更 - {old_status} → {contact.status} (コメントなし)"
+                            note=f"連絡状態変更 - {old_status} → {contact.status} (コメントなし)"
                         )
                     except Exception as log_error:
                         print(f"로그 생성 중 오류: {log_error}")
                 
                 return {
-                    "message": "レポート状態が更新されました (コメントなし)",
+                    "message": "連絡状態が更新されました (コメントなし)",
                     "comment": None,
                     "status_updated": True,
                     "old_status": old_status,
@@ -844,7 +844,7 @@ def create_contact_comment(
         # 리포트 존재 여부 확인
         contact = db.query(Contact).filter(Contact.id == contact_id).first()
         if not contact:
-            raise HTTPException(status_code=404, detail="レポートが見つかりません")
+            raise HTTPException(status_code=404, detail="連絡が見つかりません")
         
         # 새 코멘트 객체 생성
         new_comment = ContactComment(
@@ -884,7 +884,7 @@ def create_contact_comment(
                     "comment_type": comment.comment_type
                 },
                 changed_fields=["contact_id", "operator_id", "comment", "comment_type"],
-                note=f"レポートコメント追加 - {contact.contact_type}: {comment_text[:50] if comment_text else '内容なし'}..."
+                note=f"連絡コメント追加 - {contact.contact_type}: {comment_text[:50] if comment_text else '内容なし'}..."
             )
             
             # 상태 변경 로그 (상태가 변경된 경우)
@@ -898,13 +898,13 @@ def create_contact_comment(
                     old_values={"status": old_status},
                     new_values={"status": contact.status},
                     changed_fields=["status"],
-                    note=f"レポート状態変更 - {old_status} → {contact.status} (コメント: {comment_text[:30] if comment_text else '内容なし'}...)"
+                    note=f"連絡状態変更 - {old_status} → {contact.status} (コメント: {comment_text[:30] if comment_text else '内容なし'}...)"
                 )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "レポートコメントが正常に追加されました",
+            "message": "連絡コメントが正常に追加されました",
             "comment": {
                 "id": str(new_comment.id),
                 "contact_id": contact_id,
@@ -961,13 +961,13 @@ def delete_contact_comment(
                 action="DELETE",
                 user_id=current_user["id"] if current_user else None,
                 old_values=deleted_data,
-                note=f"レポートコメント削除 - {deleted_data['comment'][:50]}..."
+                note=f"連絡コメント削除 - {deleted_data['comment'][:50]}..."
             )
         except Exception as log_error:
             print(f"로그 생성 중 오류: {log_error}")
         
         return {
-            "message": "レポートコメントが正常に削除されました",
+            "message": "連絡コメントが正常に削除されました",
             "deleted_comment_id": comment_id
         }
         
