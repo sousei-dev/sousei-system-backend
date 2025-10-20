@@ -22,38 +22,51 @@ def get_db():
         db.close()
 
 def get_vapid_private_key():
-    """VAPID 개인키를 가져옵니다."""
+    """VAPID 개인키를 가져옵니다. (main.py와 동일한 방식)"""
     try:
         import os
-        from cryptography.hazmat.primitives import serialization
         
-        # 환경변수에서 VAPID 개인키 가져오기
-        vapid_private_key_pem = os.getenv("VAPID_PRIVATE_KEY")
-        if not vapid_private_key_pem:
-            print("VAPID_PRIVATE_KEY 환경변수가 설정되지 않았습니다.")
-            return None
+        # 1. 파일 경로에서 개인키 로드 시도
+        vapid_private_key_path = os.getenv("VAPID_PRIVATE_KEY_PATH", "vapid_private_key.pem")
+        if os.path.exists(vapid_private_key_path):
+            print(f"VAPID 개인키 파일 사용: {vapid_private_key_path}")
+            return vapid_private_key_path
         
-        # PEM 형식의 개인키를 로드
-        private_key = serialization.load_pem_private_key(
-            vapid_private_key_pem.encode(),
-            password=None
-        )
-        return private_key
+        # 2. 환경변수에서 직접 가져오기
+        vapid_private_key = os.getenv("VAPID_PRIVATE_KEY")
+        if vapid_private_key:
+            print("환경변수에서 VAPID 개인키 사용")
+            return vapid_private_key
+        
+        print("VAPID 개인키를 찾을 수 없습니다.")
+        return None
     except Exception as e:
         print(f"VAPID 개인키 로드 중 오류: {e}")
         return None
 
 def get_vapid_claims(endpoint: str):
-    """VAPID 클레임을 생성합니다."""
+    """VAPID 클레임을 생성합니다. (main.py와 동일한 방식)"""
     try:
-        import os
-        vapid_subject = os.getenv("VAPID_SUBJECT", "mailto:admin@example.com")
-        return {
-            "sub": vapid_subject
+        from urllib.parse import urlparse
+        
+        parsed_url = urlparse(endpoint)
+        aud = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        claims = {
+            "sub": "mailto:dev@sousei-group.com",
+            "aud": aud
         }
+        
+        print(f"VAPID 클레임 생성: endpoint={endpoint}, claims={claims}")
+        return claims
     except Exception as e:
         print(f"VAPID 클레임 생성 중 오류: {e}")
-        return {"sub": "mailto:admin@example.com"}
+        default_claims = {
+            "sub": "mailto:dev@sousei-group.com",
+            "aud": "https://fcm.googleapis.com"  # 기본값
+        }
+        print(f"기본 VAPID 클레임 사용: {default_claims}")
+        return default_claims
 
 async def get_admin_and_mishima_users(db: Session) -> List[str]:
     """admin과 mishima_user 역할을 가진 사용자 ID 목록을 반환"""
