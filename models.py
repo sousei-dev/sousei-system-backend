@@ -568,23 +568,19 @@ class ElderlyHospitalization(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     elderly_id = Column(UUID(as_uuid=True), ForeignKey("elderly.id", ondelete="CASCADE"), nullable=False)
-    hospitalization_type = Column(String, nullable=False)  # 'admission' 또는 'discharge'
     hospital_name = Column(String, nullable=False)
-    date = Column(Date, nullable=False)  # 입원일 또는 퇴원일
-    last_meal_date = Column(Date, nullable=True)  # 최종식사일 (입원시에만)
-    last_meal_type = Column(String, nullable=True)  # 최종식사 유형 (breakfast, lunch, dinner)
-    meal_resume_date = Column(Date, nullable=True)  # 식사재개일 (퇴원시에만)
-    meal_resume_type = Column(String, nullable=True)  # 식사재개 유형 (breakfast, lunch, dinner)
+    admission_date = Column(Date, nullable=False)  # 입원일
+    discharge_date = Column(Date, nullable=True)   # 퇴원일 (입원 중이면 NULL)
+    last_meal_date = Column(Date, nullable=True)
+    last_meal_type = Column(String, nullable=True)
+    meal_resume_date = Column(Date, nullable=True)
+    meal_resume_type = Column(String, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    created_by = Column(String, nullable=True)  # 기록 작성자
+    created_by = Column(String, nullable=True)
 
     # 관계 설정
     elderly = relationship("Elderly", back_populates="hospitalizations")
-
-    __table_args__ = (
-        UniqueConstraint('elderly_id', 'hospitalization_type', 'date', name='unique_hospitalization_per_day'),
-    )
 
 # ===== Contact 관련 모델들 =====
 

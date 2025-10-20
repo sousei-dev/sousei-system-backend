@@ -1,14 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import Optional
+from typing import Optional, List
 from database import SessionLocal, engine
-from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly
+from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly, Profiles
 from schemas import ElderlyHospitalizationCreate, ElderlyMealRecordCreate, ElderlyMealRecordResponse, NewResidenceRequest, ElderlyCreate, ElderlyUpdate
 from datetime import datetime, date, timedelta
 import uuid
 import calendar
 from database_log import create_database_log
 from utils.dependencies import get_current_user
+from utils.websocket_manager import manager
 
 router = APIRouter(prefix="/elderly", tags=["고령자 관리"])
 
@@ -18,6 +19,63 @@ def get_db():
         yield db
     finally:
         db.close()
+
+async def get_admin_and_mishima_users(db: Session) -> List[str]:
+    """admin과 mishima_user 역할을 가진 사용자 ID 목록을 반환"""
+    try:
+        # Profiles 테이블에서 admin과 mishima_user 역할을 가진 사용자 조회
+        admin_users = db.query(Profiles.id).filter(
+            Profiles.role.in_(["admin", "mishima_user"])
+        ).all()
+        
+        return [str(user.id) for user in admin_users]
+    except Exception as e:
+        print(f"admin/mishima_user 조회 중 오류: {e}")
+        return []
+
+async def send_hospitalization_notification(
+    db: Session, 
+    elderly_name: str, 
+    hospital_name: str, 
+    action_type: str,  # "admission" 또는 "discharge"
+    elderly_id: str
+):
+    """입원/퇴원 알림을 admin과 mishima_user에게 전송"""
+    try:
+        # admin과 mishima_user 조회
+        target_users = await get_admin_and_mishima_users(db)
+        
+        if not target_users:
+            print("알림을 받을 사용자가 없습니다.")
+            return
+        
+        # 알림 메시지 구성
+        action_text = "入院" if action_type == "admission" else "退院"
+        notification_message = {
+            "type": "hospitalization_notification",
+            "title": f"高齢者{action_text}通知",
+            "message": f"{elderly_name}さんが{hospital_name}に{action_text}されました。",
+            "elderly_name": elderly_name,
+            "hospital_name": hospital_name,
+            "action_type": action_type,
+            "elderly_id": elderly_id,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # 각 사용자에게 알림 전송
+        sent_count = 0
+        for user_id in target_users:
+            try:
+                await manager.send_personal_message(notification_message, user_id)
+                sent_count += 1
+                print(f"알림 전송 성공: {user_id}")
+            except Exception as e:
+                print(f"알림 전송 실패 ({user_id}): {e}")
+        
+        print(f"총 {sent_count}명에게 입원/퇴원 알림 전송 완료")
+        
+    except Exception as e:
+        print(f"입원/퇴원 알림 전송 중 오류: {e}")
 
 @router.get("/")
 def get_elderly(
@@ -101,30 +159,20 @@ def get_elderly(
     # 응답 데이터 구성
     elderly_data = []
     for elderly in elderly_list:
-        # 입원 상태 확인
+        # 입원 상태 확인 (새로운 스키마)
         hospitalization_status = "正常"
         latest_hospitalization = None
         
         if elderly.hospitalizations:
             # 가장 최근 입원 기록 찾기
-            latest_hospitalization = max(elderly.hospitalizations, key=lambda x: x.date)
+            latest_hospitalization = max(elderly.hospitalizations, key=lambda x: x.admission_date)
             
-            # 입원 기록이 있고 퇴원 기록이 없으면 입원중
-            admission_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'admission']
-            discharge_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'discharge']
+            # 퇴원일이 없는 기록이 있으면 입원중
+            current_hospitalization = [h for h in elderly.hospitalizations if h.discharge_date is None]
             
-            if admission_records and not discharge_records:
-                # 입원 기록만 있고 퇴원 기록이 없으면 입원중
+            if current_hospitalization:
                 hospitalization_status = "入院中"
-            elif admission_records and discharge_records:
-                # 입원과 퇴원 기록이 모두 있으면 최신 기록 확인
-                latest_admission = max(admission_records, key=lambda x: x.date)
-                latest_discharge = max(discharge_records, key=lambda x: x.date)
-                
-                if latest_admission.date > latest_discharge.date:
-                    hospitalization_status = "入院中"
-                else:
-                    hospitalization_status = "正常"
+                latest_hospitalization = max(current_hospitalization, key=lambda x: x.admission_date)
         
         # 현재 거주 기록에서 입주일 조회
         current_resident = db.query(Resident).filter(
@@ -152,9 +200,9 @@ def get_elderly(
             "latest_hospitalization": {
                 "id": str(latest_hospitalization.id),
                 "elderly_id": str(latest_hospitalization.elderly_id),
-                "hospitalization_type": latest_hospitalization.hospitalization_type,
                 "hospital_name": latest_hospitalization.hospital_name,
-                "date": latest_hospitalization.date,
+                "admission_date": latest_hospitalization.admission_date,
+                "discharge_date": latest_hospitalization.discharge_date,
                 "last_meal_date": latest_hospitalization.last_meal_date,
                 "last_meal_type": latest_hospitalization.last_meal_type,
                 "meal_resume_date": latest_hospitalization.meal_resume_date,
@@ -217,34 +265,26 @@ def get_elderly_detail(
         
         if elderly.hospitalizations:
             # 가장 최근 입원 기록 찾기
-            latest_hospitalization = max(elderly.hospitalizations, key=lambda x: x.date)
+            latest_hospitalization = max(elderly.hospitalizations, key=lambda x: x.admission_date)
             
-            # 입원 기록이 있고 퇴원 기록이 없으면 입원중
-            admission_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'admission']
-            discharge_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'discharge']
+            # 퇴원일이 없는 기록이 있으면 입원중
+            current_hospitalization = [h for h in elderly.hospitalizations if h.discharge_date is None]
             
-            if admission_records and not discharge_records:
+            if current_hospitalization:
                 hospitalization_status = "入院中"
-            elif admission_records and discharge_records:
-                latest_admission = max(admission_records, key=lambda x: x.date)
-                latest_discharge = max(discharge_records, key=lambda x: x.date)
-                
-                if latest_admission.date > latest_discharge.date:
-                    hospitalization_status = "入院中"
-                else:
-                    hospitalization_status = "正常"
+                latest_hospitalization = max(current_hospitalization, key=lambda x: x.admission_date)
         
         # 입원 이력 (최근 10개)
         hospitalization_history = []
         if elderly.hospitalizations:
-            sorted_hospitalizations = sorted(elderly.hospitalizations, key=lambda x: x.date, reverse=True)[:10]
+            sorted_hospitalizations = sorted(elderly.hospitalizations, key=lambda x: x.admission_date, reverse=True)[:10]
             for h in sorted_hospitalizations:
                 hospitalization_history.append({
                     "id": str(h.id),
                     "elderly_id": str(h.elderly_id),
-                    "hospitalization_type": h.hospitalization_type,
                     "hospital_name": h.hospital_name,
-                    "date": h.date,
+                    "admission_date": h.admission_date,
+                    "discharge_date": h.discharge_date,
                     "last_meal_date": h.last_meal_date,
                     "last_meal_type": h.last_meal_type,
                     "meal_resume_date": h.meal_resume_date,
@@ -302,9 +342,9 @@ def get_elderly_detail(
             "latest_hospitalization": {
                 "id": str(latest_hospitalization.id),
                 "elderly_id": str(latest_hospitalization.elderly_id),
-                "hospitalization_type": latest_hospitalization.hospitalization_type,
                 "hospital_name": latest_hospitalization.hospital_name,
-                "date": latest_hospitalization.date,
+                "admission_date": latest_hospitalization.admission_date,
+                "discharge_date": latest_hospitalization.discharge_date,
                 "last_meal_date": latest_hospitalization.last_meal_date,
                 "last_meal_type": latest_hospitalization.last_meal_type,
                 "meal_resume_date": latest_hospitalization.meal_resume_date,
@@ -600,8 +640,9 @@ def get_elderly_meal_records_monthly_by_building(
                     "hospitalizations": [
                         {
                             "elderly_id": str(h.elderly_id),
-                            "hospitalization_type": h.hospitalization_type,
                             "hospital_name": h.hospital_name,
+                            "admission_date": h.admission_date,
+                            "discharge_date": h.discharge_date,
                             "last_meal_date": h.last_meal_date,
                             "last_meal_type": h.last_meal_type,
                             "meal_resume_date": h.meal_resume_date,
@@ -740,9 +781,9 @@ def get_elderly_hospitalization_history(
             hospitalization_data = {
                 "id": str(hospitalization.id),
                 "elderly_id": str(hospitalization.elderly_id),
-                "hospitalization_type": hospitalization.hospitalization_type,
                 "hospital_name": hospitalization.hospital_name,
-                "date": hospitalization.date,
+                "admission_date": hospitalization.admission_date,
+                "discharge_date": hospitalization.discharge_date,
                 "last_meal_date": hospitalization.last_meal_date,
                 "last_meal_type": hospitalization.last_meal_type,
                 "meal_resume_date": hospitalization.meal_resume_date,
@@ -768,57 +809,24 @@ def get_elderly_hospitalization_history(
 
 
 @router.post("/hospitalizations")
-def create_elderly_hospitalization(
+async def create_elderly_hospitalization(
     hospitalization_data: ElderlyHospitalizationCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """거주자 입원/퇴원 기록을 생성합니다."""
+    """거주자 입원 기록을 생성합니다. (새로운 스키마)"""
     try:
         # 노인 존재 여부 확인
         elderly = db.query(Elderly).filter(Elderly.id == hospitalization_data.elderly_id).first()
         if not elderly:
             raise HTTPException(status_code=404, detail="노인을 찾을 수 없습니다")
         
-        # 퇴원 등록인 경우 기존 입원 기록 찾기
-        if hospitalization_data.hospitalization_type == "discharge":
-            existing_hospitalization = db.query(ElderlyHospitalization).filter(
-                ElderlyHospitalization.elderly_id == hospitalization_data.elderly_id,
-                ElderlyHospitalization.hospitalization_type == "admission",
-                ElderlyHospitalization.meal_resume_date.is_(None)  # 퇴원 기록이 없는 입원 기록
-            ).order_by(ElderlyHospitalization.date.desc()).first()
-            
-            if existing_hospitalization:
-                # 기존 입원 기록 업데이트
-                existing_hospitalization.hospitalization_type = "discharge"
-                existing_hospitalization.meal_resume_date = hospitalization_data.meal_resume_date
-                existing_hospitalization.meal_resume_type = hospitalization_data.meal_resume_type
-                existing_hospitalization.note = hospitalization_data.note
-                
-                db.commit()
-                db.refresh(existing_hospitalization)
-                
-                return {
-                    "message": f"퇴원 기록이 기존 입원 기록에 업데이트되었습니다.",
-                    "item": {
-                        "id": str(existing_hospitalization.id),
-                        "elderly_id": str(existing_hospitalization.elderly_id),
-                        "hospitalization_type": existing_hospitalization.hospitalization_type,
-                        "hospital_name": existing_hospitalization.hospital_name,
-                        "date": existing_hospitalization.date,
-                        "meal_resume_date": existing_hospitalization.meal_resume_date,
-                        "meal_resume_type": existing_hospitalization.meal_resume_type
-                    }
-                }
-            else:
-                raise HTTPException(status_code=404, detail="해당 노인의 미완료 입원 기록을 찾을 수 없습니다")
-        
-        # 입원 기록 생성 (기존 로직)
+        # 입원 기록 생성
         hospitalization = ElderlyHospitalization(
             elderly_id=hospitalization_data.elderly_id,
-            hospitalization_type=hospitalization_data.hospitalization_type,
             hospital_name=hospitalization_data.hospital_name,
-            date=hospitalization_data.date,
+            admission_date=hospitalization_data.admission_date,
+            discharge_date=hospitalization_data.discharge_date,  # 퇴원일 (입원 시에는 None)
             last_meal_date=hospitalization_data.last_meal_date,
             last_meal_type=hospitalization_data.last_meal_type,
             meal_resume_date=hospitalization_data.meal_resume_date,
@@ -831,20 +839,89 @@ def create_elderly_hospitalization(
         db.commit()
         db.refresh(hospitalization)
         
+        # 웹푸시 알림 전송 (입원 기록 생성 시)
+        try:
+            await send_hospitalization_notification(
+                db=db,
+                elderly_name=elderly.name,
+                hospital_name=hospitalization_data.hospital_name,
+                action_type="admission",
+                elderly_id=str(elderly.id)
+            )
+        except Exception as e:
+            print(f"입원 알림 전송 중 오류: {e}")
+        
         return {
-            "message": f"입원 기록이 정상적으로 생성되었습니다.",
+            "message": "입원 기록이 정상적으로 생성되었습니다.",
             "item": {
-              "id": str(hospitalization.id),
-              "elderly_id": str(hospitalization.elderly_id),
-              "hospitalization_type": hospitalization.hospitalization_type,
-              "hospital_name": hospitalization.hospital_name,
-              "date": hospitalization.date
+                "id": str(hospitalization.id),
+                "elderly_id": str(hospitalization.elderly_id),
+                "hospital_name": hospitalization.hospital_name,
+                "admission_date": hospitalization.admission_date,
+                "discharge_date": hospitalization.discharge_date
             }
         }
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"입원/퇴원 기록 생성 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"입원 기록 생성 중 오류가 발생했습니다: {str(e)}")
+
+@router.put("/hospitalizations/{hospitalization_id}/discharge")
+async def discharge_patient(
+    hospitalization_id: str,
+    discharge_data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """환자를 퇴원 처리합니다."""
+    try:
+        # 입원 기록 조회
+        hospitalization = db.query(ElderlyHospitalization).filter(
+            ElderlyHospitalization.id == hospitalization_id
+        ).first()
+        
+        if not hospitalization:
+            raise HTTPException(status_code=404, detail="입원 기록을 찾을 수 없습니다")
+        
+        # 퇴원 처리
+        hospitalization.discharge_date = discharge_data.get("discharge_date")
+        hospitalization.meal_resume_date = discharge_data.get("meal_resume_date")
+        hospitalization.meal_resume_type = discharge_data.get("meal_resume_type")
+        if discharge_data.get("note"):
+            hospitalization.note = discharge_data.get("note")
+        
+        db.commit()
+        db.refresh(hospitalization)
+        
+        # 웹푸시 알림 전송 (퇴원 처리 시)
+        try:
+            # 고령자 정보 조회
+            elderly = db.query(Elderly).filter(Elderly.id == hospitalization.elderly_id).first()
+            if elderly:
+                await send_hospitalization_notification(
+                    db=db,
+                    elderly_name=elderly.name,
+                    hospital_name=hospitalization.hospital_name,
+                    action_type="discharge",
+                    elderly_id=str(elderly.id)
+                )
+        except Exception as e:
+            print(f"퇴원 알림 전송 중 오류: {e}")
+        
+        return {
+            "message": "퇴원 처리가 완료되었습니다.",
+            "item": {
+                "id": str(hospitalization.id),
+                "elderly_id": str(hospitalization.elderly_id),
+                "hospital_name": hospitalization.hospital_name,
+                "admission_date": hospitalization.admission_date,
+                "discharge_date": hospitalization.discharge_date
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"퇴원 처리 중 오류가 발생했습니다: {str(e)}")
 
 @router.get("/hospitalizations/{year}/{month}")
 def get_elderly_hospitalizations_by_month(
@@ -872,25 +949,28 @@ def get_elderly_hospitalizations_by_month(
         else:
             end_date = date(year, month + 1, 1) - timedelta(days=1)
         
-        # 기본 쿼리 생성
+        # 기본 쿼리 생성 (새로운 스키마)
+        # 입원일 또는 퇴원일이 해당 월에 포함되는 기록 조회
         query = db.query(ElderlyHospitalization).filter(
-            ElderlyHospitalization.date >= start_date,
-            ElderlyHospitalization.date <= end_date
+            (ElderlyHospitalization.admission_date >= start_date) & 
+            (ElderlyHospitalization.admission_date <= end_date)
+        ).union(
+            db.query(ElderlyHospitalization).filter(
+                (ElderlyHospitalization.discharge_date >= start_date) & 
+                (ElderlyHospitalization.discharge_date <= end_date)
+            )
         )
         
         # 필터링 조건 추가
         if elderly_id:
             query = query.filter(ElderlyHospitalization.elderly_id == elderly_id)
         
-        if hospitalization_type:
-            query = query.filter(ElderlyHospitalization.hospitalization_type == hospitalization_type)
-        
         # 총 개수 계산
         total_count = query.count()
         
         # 페이지네이션 적용
         offset = (page - 1) * page_size
-        hospitalizations = query.order_by(ElderlyHospitalization.date.desc()).offset(offset).limit(page_size).all()
+        hospitalizations = query.order_by(ElderlyHospitalization.admission_date.desc()).offset(offset).limit(page_size).all()
         
         # 응답 데이터 구성
         hospitalization_data = []
@@ -903,9 +983,9 @@ def get_elderly_hospitalizations_by_month(
                 "elderly_id": str(hospitalization.elderly_id),
                 "elderly_name": elderly.name if elderly else "Unknown",
                 "elderly_name_katakana": elderly.name_katakana if elderly else None,
-                "hospitalization_type": hospitalization.hospitalization_type,
                 "hospital_name": hospitalization.hospital_name,
-                "date": hospitalization.date,
+                "admission_date": hospitalization.admission_date,
+                "discharge_date": hospitalization.discharge_date,
                 "last_meal_date": hospitalization.last_meal_date,
                 "last_meal_type": hospitalization.last_meal_type,
                 "meal_resume_date": hospitalization.meal_resume_date,
@@ -931,9 +1011,11 @@ def get_elderly_hospitalizations_by_month(
             }
             hospitalization_data.append(hospitalization_dict)
         
-        # 월별 통계 계산
-        admission_count = len([h for h in hospitalizations if h.hospitalization_type == 'admission'])
-        discharge_count = len([h for h in hospitalizations if h.hospitalization_type == 'discharge'])
+        # 월별 통계 계산 (새로운 스키마)
+        # 해당 월에 입원한 사람 수 (입원일이 해당 월에 있는 경우)
+        admission_count = len([h for h in hospitalizations if h.admission_date and start_date <= h.admission_date <= end_date])
+        # 해당 월에 퇴원한 사람 수 (퇴원일이 해당 월에 있는 경우)
+        discharge_count = len([h for h in hospitalizations if h.discharge_date and start_date <= h.discharge_date <= end_date])
         unique_elderly_count = len(set(h.elderly_id for h in hospitalizations))
         
         return {
@@ -958,6 +1040,114 @@ def get_elderly_hospitalizations_by_month(
         raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"병원 입퇴원 기록 조회 중 오류가 발생했습니다: {str(e)}")
+
+@router.get("/hospitalizations/recent")
+def get_elderly_hospitalizations_recent(
+    elderly_id: Optional[str] = Query(None, description="특정 고령자 ID로 필터링"),
+    hospitalization_type: Optional[str] = Query(None, description="입원/퇴원 유형으로 필터링 (admission 또는 discharge)"),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    page_size: int = Query(10, description="페이지당 항목 수", ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """오늘 기준으로 3개월 이내의 병원 입퇴원 기록을 조회합니다."""
+    try:
+        # 오늘 기준으로 3개월 이내의 데이터 조회
+        today = date.today()
+        three_months_ago = today - timedelta(days=90)  # 약 3개월
+        
+        # 기본 쿼리 생성 (3개월 이내 데이터만)
+        # 입원일 또는 퇴원일이 3개월 이내에 포함되는 기록 조회
+        query = db.query(ElderlyHospitalization).filter(
+            (ElderlyHospitalization.admission_date >= three_months_ago) & 
+            (ElderlyHospitalization.admission_date <= today)
+        ).union(
+            db.query(ElderlyHospitalization).filter(
+                (ElderlyHospitalization.discharge_date >= three_months_ago) & 
+                (ElderlyHospitalization.discharge_date <= today)
+            )
+        )
+        
+        # 필터링 조건 추가
+        if elderly_id:
+            query = query.filter(ElderlyHospitalization.elderly_id == elderly_id)
+        
+        # hospitalization_type 필터는 새로운 스키마에서는 사용하지 않음
+        
+        # 총 개수 계산
+        total_count = query.count()
+        
+        # 페이지네이션 적용
+        offset = (page - 1) * page_size
+        hospitalizations = query.order_by(ElderlyHospitalization.admission_date.desc()).offset(offset).limit(page_size).all()
+        
+        # 응답 데이터 구성
+        hospitalization_data = []
+        for hospitalization in hospitalizations:
+            # 고령자 정보 조회
+            elderly = db.query(Elderly).filter(Elderly.id == hospitalization.elderly_id).first()
+            
+            hospitalization_dict = {
+                "id": str(hospitalization.id),
+                "elderly_id": str(hospitalization.elderly_id),
+                "elderly_name": elderly.name if elderly else "Unknown",
+                "elderly_name_katakana": elderly.name_katakana if elderly else None,
+                "hospital_name": hospitalization.hospital_name,
+                "admission_date": hospitalization.admission_date,
+                "discharge_date": hospitalization.discharge_date,
+                "last_meal_date": hospitalization.last_meal_date,
+                "last_meal_type": hospitalization.last_meal_type,
+                "meal_resume_date": hospitalization.meal_resume_date,
+                "meal_resume_type": hospitalization.meal_resume_type,
+                "note": hospitalization.note,
+                "created_at": hospitalization.created_at,
+                "created_by": hospitalization.created_by,
+                "elderly": {
+                    "id": str(elderly.id),
+                    "name": elderly.name,
+                    "name_katakana": elderly.name_katakana,
+                    "gender": elderly.gender,
+                    "care_level": elderly.care_level,
+                    "current_room": {
+                        "id": str(elderly.current_room.id),
+                        "room_number": elderly.current_room.room_number,
+                        "building": {
+                            "id": str(elderly.current_room.building.id),
+                            "name": elderly.current_room.building.name
+                        } if elderly.current_room and elderly.current_room.building else None
+                    } if elderly.current_room else None
+                } if elderly else None
+            }
+            hospitalization_data.append(hospitalization_dict)
+        
+        # 통계 계산 (새로운 스키마)
+        # 3개월 이내에 입원한 사람 수
+        admission_count = len([h for h in hospitalizations if h.admission_date and three_months_ago <= h.admission_date <= today])
+        # 3개월 이내에 퇴원한 사람 수
+        discharge_count = len([h for h in hospitalizations if h.discharge_date and three_months_ago <= h.discharge_date <= today])
+        unique_elderly_count = len(set(h.elderly_id for h in hospitalizations))
+        
+        return {
+            "period": "3개월 이내",
+            "start_date": str(three_months_ago),
+            "end_date": str(today),
+            "items": hospitalization_data,
+            "total": total_count,
+            "total_pages": (total_count + page_size - 1) // page_size,
+            "current_page": page,
+            "page_size": page_size,
+            "statistics": {
+                "total_hospitalizations": len(hospitalizations),
+                "admission_count": admission_count,
+                "discharge_count": discharge_count,
+                "unique_elderly_count": unique_elderly_count
+            }
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"날짜 계산 중 오류가 발생했습니다: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"최근 병원 입퇴원 기록 조회 중 오류가 발생했습니다: {str(e)}")
     
 @router.get("/meal-records/monthly-building/{building_id}/{year}/{month}")
 def get_elderly_meal_records_monthly_by_building(
@@ -1130,8 +1320,9 @@ def get_elderly_meal_records_monthly_by_building(
                 "hospitalizations": [
                     {
                         "elderly_id": str(h.elderly_id),
-                        "hospitalization_type": h.hospitalization_type,
                         "hospital_name": h.hospital_name,
+                        "admission_date": h.admission_date,
+                        "discharge_date": h.discharge_date,
                         "last_meal_date": h.last_meal_date,
                         "last_meal_type": h.last_meal_type,
                         "meal_resume_date": h.meal_resume_date,
@@ -1880,30 +2071,14 @@ def get_building_elderly_statistics(
             else:
                 gender_distribution["その他"] += 1
             
-            # 입원 기록 확인
+            # 입원 기록 확인 (새로운 스키마)
             if elderly.hospitalizations:
-                # 입원 기록과 퇴원 기록 분리
-                admission_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'admission']
-                discharge_records = [h for h in elderly.hospitalizations if h.hospitalization_type == 'discharge']
+                # 퇴원일이 없는 기록이 있으면 입원중
+                current_hospitalization = [h for h in elderly.hospitalizations if h.discharge_date is None]
                 
-                is_hospitalized = False
-                latest_admission = None
-                
-                if admission_records and not discharge_records:
-                    # 입원 기록만 있고 퇴원 기록이 없으면 입원중
-                    is_hospitalized = True
-                    latest_admission = max(admission_records, key=lambda x: x.date)
-                elif admission_records and discharge_records:
-                    # 입원과 퇴원 기록이 모두 있으면 최신 기록 확인
-                    latest_admission_record = max(admission_records, key=lambda x: x.date)
-                    latest_discharge_record = max(discharge_records, key=lambda x: x.date)
-                    
-                    if latest_admission_record.date > latest_discharge_record.date:
-                        is_hospitalized = True
-                        latest_admission = latest_admission_record
-                
-                # 입원 중인 경우 카운트 및 상세 정보 추가
-                if is_hospitalized and latest_admission:
+                if current_hospitalization:
+                    # 가장 최근 입원 기록
+                    latest_admission = max(current_hospitalization, key=lambda x: x.admission_date)
                     hospitalized_count += 1
                     hospitalized_residents.append({
                         "elderly_id": str(elderly.id),
@@ -1911,7 +2086,7 @@ def get_building_elderly_statistics(
                         "elderly_name_katakana": elderly.name_katakana,
                         "room_number": resident.room.room_number if resident.room else None,
                         "care_level": elderly.care_level,
-                        "admission_date": latest_admission.date,
+                        "admission_date": latest_admission.admission_date,
                         "hospital_name": latest_admission.hospital_name,
                         "last_meal_date": latest_admission.last_meal_date,
                         "last_meal_type": latest_admission.last_meal_type,

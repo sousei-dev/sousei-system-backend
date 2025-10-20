@@ -1044,9 +1044,9 @@ class ElderlyMealRecordResponse(BaseModel):
 
 class ElderlyHospitalizationCreate(BaseModel):
     elderly_id: str
-    hospitalization_type: str  # 'admission' 또는 'discharge'
     hospital_name: str
-    date: date
+    admission_date: Optional[date] = None
+    discharge_date: Optional[date] = None  # 퇴원일 (입원 시에는 None)
     last_meal_date: Optional[date] = None
     last_meal_type: Optional[str] = None  # 'breakfast', 'lunch', 'dinner'
     meal_resume_date: Optional[date] = None
@@ -1055,7 +1055,8 @@ class ElderlyHospitalizationCreate(BaseModel):
 
 class ElderlyHospitalizationUpdate(BaseModel):
     hospital_name: Optional[str] = None
-    date: Optional[date] = None
+    admission_date: Optional[date] = None
+    discharge_date: Optional[date] = None
     last_meal_date: Optional[date] = None
     last_meal_type: Optional[str] = None
     meal_resume_date: Optional[date] = None
@@ -1064,10 +1065,10 @@ class ElderlyHospitalizationUpdate(BaseModel):
 
 class ElderlyHospitalizationResponse(BaseModel):
     id: str
-    resident_id: str
-    hospitalization_type: str
+    elderly_id: str
     hospital_name: str
-    date: date
+    admission_date: date
+    discharge_date: Optional[date] = None
     last_meal_date: Optional[date] = None
     last_meal_type: Optional[str] = None
     meal_resume_date: Optional[date] = None
