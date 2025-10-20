@@ -2,14 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List
 from database import SessionLocal, engine
-from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly, Profiles
+from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly, Profiles, PushSubscription
 from schemas import ElderlyHospitalizationCreate, ElderlyMealRecordCreate, ElderlyMealRecordResponse, NewResidenceRequest, ElderlyCreate, ElderlyUpdate
 from datetime import datetime, date, timedelta
 import uuid
 import calendar
+import json
 from database_log import create_database_log
 from utils.dependencies import get_current_user
-from utils.websocket_manager import manager
+from pywebpush import webpush, WebPushException
 
 router = APIRouter(prefix="/elderly", tags=["고령자 관리"])
 
@@ -19,6 +20,40 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def get_vapid_private_key():
+    """VAPID 개인키를 가져옵니다."""
+    try:
+        import os
+        from cryptography.hazmat.primitives import serialization
+        
+        # 환경변수에서 VAPID 개인키 가져오기
+        vapid_private_key_pem = os.getenv("VAPID_PRIVATE_KEY")
+        if not vapid_private_key_pem:
+            print("VAPID_PRIVATE_KEY 환경변수가 설정되지 않았습니다.")
+            return None
+        
+        # PEM 형식의 개인키를 로드
+        private_key = serialization.load_pem_private_key(
+            vapid_private_key_pem.encode(),
+            password=None
+        )
+        return private_key
+    except Exception as e:
+        print(f"VAPID 개인키 로드 중 오류: {e}")
+        return None
+
+def get_vapid_claims(endpoint: str):
+    """VAPID 클레임을 생성합니다."""
+    try:
+        import os
+        vapid_subject = os.getenv("VAPID_SUBJECT", "mailto:admin@example.com")
+        return {
+            "sub": vapid_subject
+        }
+    except Exception as e:
+        print(f"VAPID 클레임 생성 중 오류: {e}")
+        return {"sub": "mailto:admin@example.com"}
 
 async def get_admin_and_mishima_users(db: Session) -> List[str]:
     """admin과 mishima_user 역할을 가진 사용자 ID 목록을 반환"""
@@ -40,7 +75,7 @@ async def send_hospitalization_notification(
     action_type: str,  # "admission" 또는 "discharge"
     elderly_id: str
 ):
-    """입원/퇴원 알림을 admin과 mishima_user에게 전송"""
+    """입원/퇴원 웹푸시 알림을 admin과 mishima_user에게 전송"""
     try:
         # admin과 mishima_user 조회
         target_users = await get_admin_and_mishima_users(db)
@@ -49,33 +84,99 @@ async def send_hospitalization_notification(
             print("알림을 받을 사용자가 없습니다.")
             return
         
+        # VAPID 개인키 가져오기
+        vapid_private_key = get_vapid_private_key()
+        if not vapid_private_key:
+            print("VAPID 개인키를 가져올 수 없습니다.")
+            return
+        
         # 알림 메시지 구성
         action_text = "入院" if action_type == "admission" else "退院"
-        notification_message = {
-            "type": "hospitalization_notification",
-            "title": f"高齢者{action_text}通知",
-            "message": f"{elderly_name}さんが{hospital_name}に{action_text}されました。",
-            "elderly_name": elderly_name,
-            "hospital_name": hospital_name,
-            "action_type": action_type,
-            "elderly_id": elderly_id,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        title = f"高齢者{action_text}通知"
+        body = f"{elderly_name}さんが{hospital_name}に{action_text}されました。"
         
-        # 각 사용자에게 알림 전송
+        # 각 사용자에게 웹푸시 알림 전송
         sent_count = 0
         for user_id in target_users:
             try:
-                await manager.send_personal_message(notification_message, user_id)
+                # 사용자의 푸시 구독 정보 조회
+                subscriptions = db.query(PushSubscription).filter(
+                    PushSubscription.user_id == user_id
+                ).all()
+                
+                if not subscriptions:
+                    print(f"사용자 {user_id}의 푸시 구독 정보가 없습니다")
+                    continue
+                
+                # 각 구독에 대해 푸시 알림 전송
+                for subscription in subscriptions:
+                    try:
+                        subscription_info = {
+                            "endpoint": subscription.endpoint,
+                            "keys": {
+                                "p256dh": subscription.p256dh,
+                                "auth": subscription.auth
+                            }
+                        }
+                        
+                        # 푸시 페이로드 생성
+                        push_data = {
+                            "type": "hospitalization_notification",
+                            "elderly_name": elderly_name,
+                            "hospital_name": hospital_name,
+                            "action_type": action_type,
+                            "elderly_id": elderly_id
+                        }
+                        
+                        payload = {
+                            "notification": {
+                                "title": title,
+                                "body": body,
+                                "icon": "/static/icons/icon-192x192.png",
+                                "badge": "/static/icons/badge-72x72.png",
+                                "vibrate": [200, 100, 200],
+                                "tag": f"hospitalization-{action_type}-{datetime.utcnow().timestamp()}",
+                                "requireInteraction": True,
+                                "data": push_data
+                            }
+                        }
+                        
+                        # VAPID 클레임 생성
+                        vapid_claims = get_vapid_claims(subscription.endpoint)
+                        
+                        # 웹푸시 전송
+                        webpush(
+                            subscription_info=subscription_info,
+                            data=json.dumps(payload),
+                            vapid_private_key=vapid_private_key,
+                            vapid_claims=vapid_claims,
+                            ttl=86400,  # 24시간
+                            headers={
+                                "Urgency": "high"
+                            }
+                        )
+                        
+                        print(f"웹푸시 알림 전송 성공: 사용자 {user_id}")
+                        
+                    except WebPushException as ex:
+                        print(f"웹푸시 알림 전송 실패 (사용자: {user_id}, 구독 ID: {subscription.id}): {ex}")
+                        if ex.response and ex.response.status_code == 410:
+                            # 만료된 구독 삭제
+                            db.delete(subscription)
+                            db.commit()
+                            print(f"만료된 구독 삭제: {subscription.id}")
+                    except Exception as e:
+                        print(f"웹푸시 알림 전송 중 오류 (사용자: {user_id}): {e}")
+                
                 sent_count += 1
-                print(f"알림 전송 성공: {user_id}")
+                
             except Exception as e:
-                print(f"알림 전송 실패 ({user_id}): {e}")
+                print(f"사용자 {user_id} 웹푸시 알림 전송 중 오류: {e}")
         
-        print(f"총 {sent_count}명에게 입원/퇴원 알림 전송 완료")
+        print(f"총 {sent_count}명에게 입원/퇴원 웹푸시 알림 전송 완료")
         
     except Exception as e:
-        print(f"입원/퇴원 알림 전송 중 오류: {e}")
+        print(f"입원/퇴원 웹푸시 알림 전송 중 오류: {e}")
 
 @router.get("/")
 def get_elderly(
