@@ -1,14 +1,15 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.security import HTTPBearer
-from typing import Optional
+from typing import Optional, Dict, List
 import json
 import base64
 import logging
 from datetime import datetime
 from utils.websocket_manager import manager
 from database import SessionLocal
-from models import Conversation, ConversationMember, Message, Attachment
+from models import Conversation, ConversationMember, Message, Attachment, MessageRead
 from routers.chat import supabase
+from sqlalchemy.orm import Session
 
 router = APIRouter(tags=["WebSocket"])
 
@@ -20,6 +21,167 @@ def get_db():
         yield db
     finally:
         db.close()
+
+async def get_unread_message_counts(user_id: str, db: Session) -> Dict[str, int]:
+    """사용자의 미확인 메시지 수를 조회합니다. (chat.py의 로직과 동일 - message_reads 테이블 활용)"""
+    try:
+        # 사용자가 참여한 대화방 목록 조회
+        user_conversations = db.query(ConversationMember).filter(
+            ConversationMember.user_id == user_id
+        ).all()
+        
+        unread_counts = {}
+        
+        # 각 대화방별로 미확인 메시지 수 계산
+        for member in user_conversations:
+            conversation_id = str(member.conversation_id)
+            
+            # 해당 대화방의 모든 메시지 조회
+            messages = db.query(Message).filter(
+                Message.conversation_id == conversation_id,
+                Message.deleted_at.is_(None)  # 삭제되지 않은 메시지만
+            ).all()
+            
+            if not messages:
+                unread_counts[conversation_id] = 0
+                continue
+            
+            # 해당 대화방의 모든 메시지 ID 수집
+            message_ids = [str(msg.id) for msg in messages]
+            
+            # 한 번에 모든 읽음 상태 조회 (배치 쿼리)
+            read_status_data = {}
+            if message_ids:
+                try:
+                    read_statuses = db.query(MessageRead).filter(
+                        MessageRead.message_id.in_(message_ids),
+                        MessageRead.user_id == user_id
+                    ).all()
+                    
+                    for read_status in read_statuses:
+                        read_status_data[str(read_status.message_id)] = True
+                        
+                except Exception as e:
+                    logger.warning(f"대화방 {conversation_id} 읽음 상태 배치 조회 실패: {e}")
+            
+            # 읽지 않은 메시지 수 계산 (chat.py와 동일한 로직)
+            unread_count = 0
+            for msg in messages:
+                msg_id_str = str(msg.id)
+                if (str(msg.sender_id) != user_id and 
+                    msg_id_str not in read_status_data):
+                    unread_count += 1
+            
+            unread_counts[conversation_id] = unread_count
+        
+        return unread_counts
+        
+    except Exception as e:
+        logger.error(f"미확인 메시지 수 조회 중 오류: {e}")
+        return {}
+
+async def get_unread_notification_counts(user_id: str, db: Session) -> Dict[str, int]:
+    """사용자의 미확인 알림 수를 조회합니다."""
+    try:
+        # 여기서는 예시로 구현
+        # 실제로는 알림 테이블이 있다면 해당 테이블에서 조회
+        # 예: Notification 테이블에서 is_read = false인 알림 수 조회
+        
+        # 현재는 빈 딕셔너리 반환 (나중에 알림 시스템이 구현되면 확장)
+        return {
+            "hospitalization": 0,  # 입원/퇴원 알림
+            "contact": 0,         # 리포트 알림
+            "system": 0           # 시스템 알림
+        }
+        
+    except Exception as e:
+        logger.error(f"미확인 알림 수 조회 중 오류: {e}")
+        return {}
+
+async def update_unread_counts_for_conversation(conversation_id: str, db: Session):
+    """특정 대화방의 모든 멤버들에게 미확인 메시지 수를 업데이트합니다."""
+    try:
+        # 대화방의 모든 멤버 조회
+        members = db.query(ConversationMember).filter(
+            ConversationMember.conversation_id == conversation_id
+        ).all()
+        
+        for member in members:
+            user_id = member.user_id
+            
+            # 해당 사용자의 미확인 메시지 수 조회
+            unread_message_counts = await get_unread_message_counts(user_id, db)
+            unread_notification_counts = await get_unread_notification_counts(user_id, db)
+            
+            # 미확인 메시지 수 업데이트 전송
+            await manager.send_personal_message({
+                "type": "unread_counts_updated",
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "messages": unread_message_counts,
+                    "notifications": unread_notification_counts,
+                    "total_unread_messages": sum(unread_message_counts.values()),
+                    "total_unread_notifications": sum(unread_notification_counts.values())
+                }
+            }, user_id)
+            
+    except Exception as e:
+        logger.error(f"미확인 메시지 수 업데이트 중 오류: {e}")
+
+async def mark_messages_as_read(user_id: str, conversation_id: str, db: Session):
+    """사용자가 특정 대화방의 메시지를 읽음 처리합니다. (chat.py의 mark_conversation_as_read 로직과 동일)"""
+    try:
+        # 대화방 존재 여부 및 참여 권한 확인
+        conversation = db.query(Conversation).join(ConversationMember).filter(
+            Conversation.id == conversation_id,
+            ConversationMember.user_id == user_id
+        ).first()
+        
+        if not conversation:
+            logger.warning(f"대화방 {conversation_id}에 대한 접근 권한이 없습니다 (사용자: {user_id})")
+            return
+        
+        # 읽지 않은 메시지들 조회
+        unread_messages = db.query(Message).filter(
+            Message.conversation_id == conversation_id,
+            Message.sender_id != user_id,
+            Message.deleted_at.is_(None)
+        ).all()
+        
+        if not unread_messages:
+            logger.info(f"대화방 {conversation_id}에 읽지 않은 메시지가 없습니다")
+            return
+        
+        # 배치로 읽음 처리
+        read_records = []
+        for msg in unread_messages:
+            # 이미 읽음 처리되었는지 확인
+            existing_read = db.query(MessageRead).filter(
+                MessageRead.message_id == msg.id,
+                MessageRead.user_id == user_id
+            ).first()
+            
+            if not existing_read:
+                read_records.append(MessageRead(
+                    message_id=msg.id,
+                    user_id=user_id,
+                    read_at=datetime.utcnow()
+                ))
+        
+        if read_records:
+            db.add_all(read_records)
+            db.commit()
+            
+            logger.info(f"대화방 {conversation_id}에서 {len(read_records)}개 메시지를 읽음 처리했습니다")
+            
+            # 미확인 메시지 수 업데이트
+            await update_unread_counts_for_conversation(conversation_id, db)
+        else:
+            logger.info(f"대화방 {conversation_id}에서 이미 모든 메시지가 읽음 처리되어 있습니다")
+            
+    except Exception as e:
+        logger.error(f"메시지 읽음 처리 중 오류: {e}")
 
 async def authenticate_websocket(websocket: WebSocket) -> Optional[str]:
     """WebSocket 연결 인증"""
@@ -95,7 +257,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "message": "WebSocket 연결이 성공적으로 설정되었습니다"
         }))
         
-        # 사용자가 참여 중인 대화방들에 참여
+        # 사용자가 참여 중인 대화방들에 참여 및 미확인 메시지 수 조회
         db = SessionLocal()
         try:
             user_conversations = db.query(ConversationMember).filter(
@@ -104,6 +266,23 @@ async def websocket_endpoint(websocket: WebSocket):
             
             for conv_member in user_conversations:
                 manager.join_conversation(user_id, str(conv_member.conversation_id))
+            
+            # 미확인 메시지 수 조회
+            unread_message_counts = await get_unread_message_counts(user_id, db)
+            unread_notification_counts = await get_unread_notification_counts(user_id, db)
+            
+            # 미확인 메시지 수 전송
+            await websocket.send_text(json.dumps({
+                "type": "unread_counts",
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "messages": unread_message_counts,
+                    "notifications": unread_notification_counts,
+                    "total_unread_messages": sum(unread_message_counts.values()),
+                    "total_unread_notifications": sum(unread_notification_counts.values())
+                }
+            }))
                 
         except Exception as e:
             logger.error(f"사용자 대화방 정보 조회 실패: {e}")
@@ -172,6 +351,27 @@ async def websocket_room_endpoint(websocket: WebSocket, conversation_id: str):
             "message": f"채팅방 {conversation_id}에 성공적으로 연결되었습니다"
         }))
         
+        # 미확인 메시지 수 조회 및 전송
+        try:
+            unread_message_counts = await get_unread_message_counts(user_id, db)
+            unread_notification_counts = await get_unread_notification_counts(user_id, db)
+            
+            # 미확인 메시지 수 전송
+            await websocket.send_text(json.dumps({
+                "type": "unread_counts",
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "messages": unread_message_counts,
+                    "notifications": unread_notification_counts,
+                    "total_unread_messages": sum(unread_message_counts.values()),
+                    "total_unread_notifications": sum(unread_notification_counts.values())
+                }
+            }))
+        except Exception as e:
+            logger.error(f"미확인 메시지 수 조회 실패: {e}")
+        
         # 메시지 처리 루프
         try:
             while True:
@@ -179,7 +379,7 @@ async def websocket_room_endpoint(websocket: WebSocket, conversation_id: str):
                 message = json.loads(data)
                 
                 # 채팅방 관련 메시지만 처리
-                if message.get("type") in ["send_message", "typing_start", "typing_stop"]:
+                if message.get("type") in ["send_message", "typing_start", "typing_stop", "mark_as_read"]:
                     await handle_room_websocket_message(websocket, user_id, conversation_id, message)
                 else:
                     # 지원하지 않는 메시지 타입
@@ -363,6 +563,12 @@ async def handle_room_websocket_message(websocket: WebSocket, user_id: str, conv
                     "timestamp": datetime.utcnow().isoformat()
                 }, user_id, conversation_id)
                 
+                # 미확인 메시지 수 업데이트 (비동기로 처리)
+                try:
+                    await update_unread_counts_for_conversation(conversation_id, db)
+                except Exception as update_error:
+                    logger.error(f"미확인 메시지 수 업데이트 실패: {update_error}")
+                
                 logger.info(f"채팅방 {conversation_id}에서 메시지 {new_message.id} 전송 완료")
                 
             except Exception as e:
@@ -398,6 +604,30 @@ async def handle_room_websocket_message(websocket: WebSocket, user_id: str, conv
             "conversation_id": conversation_id,
             "timestamp": datetime.utcnow().isoformat()
         }, conversation_id, exclude_user=user_id)
+    
+    elif message_type == "mark_as_read":
+        # 메시지 읽음 처리
+        db = SessionLocal()
+        try:
+            await mark_messages_as_read(user_id, conversation_id, db)
+            
+            # 읽음 처리 완료 알림
+            await manager.send_room_personal_message({
+                "type": "messages_marked_as_read",
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }, user_id, conversation_id)
+            
+        except Exception as e:
+            logger.error(f"메시지 읽음 처리 중 오류: {e}")
+            await manager.send_room_personal_message({
+                "type": "error",
+                "message": f"메시지 읽음 처리 중 오류가 발생했습니다: {str(e)}",
+                "timestamp": datetime.utcnow().isoformat()
+            }, user_id, conversation_id)
+        finally:
+            db.close()
     
     else:
         # 지원하지 않는 메시지 타입
