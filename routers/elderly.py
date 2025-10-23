@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List
 from database import SessionLocal, engine
-from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly, Profiles, PushSubscription
+from models import ElderlyMealRecord, ElderlyHospitalization, Resident, Room, Building, User, Elderly, Profiles, PushSubscription, ElderlyCategories, BuildingCategoriesRent, ElderlyContract
 from schemas import ElderlyHospitalizationCreate, ElderlyMealRecordCreate, ElderlyMealRecordResponse, NewResidenceRequest, ElderlyCreate, ElderlyUpdate
 from datetime import datetime, date, timedelta
 import uuid
@@ -310,6 +310,7 @@ def get_elderly(
             "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
             "care_level": elderly.care_level,
             "check_in_date": current_resident.check_in_date if current_resident else None,
+            "contract_date": elderly.contract_date,
             "hospitalization_status": hospitalization_status,
             "latest_hospitalization": {
                 "id": str(latest_hospitalization.id),
@@ -352,6 +353,73 @@ def get_elderly(
         "total": total_count,
         "total_pages": (total_count + page_size - 1) // page_size
     }
+
+@router.get("/rent-by-category")
+def get_elderly_rent_by_category(
+    categories_id: str = Query(..., description="카테고리 ID"),
+    building_id: str = Query(..., description="빌딩 ID"),
+    room_id: str = Query(..., description="방 ID"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """카테고리 ID와 빌딩 ID로 카테고리별 월세 조회"""
+    try:
+        # 카테고리 ID 확인
+        if not categories_id:
+            raise HTTPException(status_code=400, detail="カテゴリIDが設定されていません")
+        
+        # 빌딩 존재 여부 확인
+        building = db.query(Building).filter(Building.id == building_id).first()
+        if not building:
+            raise HTTPException(status_code=404, detail="建物が見つかりません")
+        
+        # 방 정보 조회
+        room = db.query(Room).filter(
+            Room.id == room_id,
+            Room.building_id == building_id
+        ).first()
+        
+        if not room:
+            raise HTTPException(status_code=404, detail="指定された部屋が見つかりません")
+        
+        # 기본 rent, maintenance, service 값 설정
+        rent_value = room.rent
+        maintenance_value = room.maintenance
+        service_value = room.service
+        deposit_value = room.deposit
+        
+        # BuildingCategoriesRent에서 추가 조회하여 rent 값 대체
+        rent_info = db.query(BuildingCategoriesRent).filter(
+            BuildingCategoriesRent.building_id == building_id,
+            BuildingCategoriesRent.categories_id == categories_id
+        ).first()
+        
+        # BuildingCategoriesRent에서 데이터가 있으면 rent 값을 monthly_rent로 대체
+        if rent_info:
+            rent_value = rent_info.monthly_rent
+        
+        # 응답 데이터 구성
+        return {
+            "building_id": building_id,
+            "building_name": building.name,
+            "room_id": room_id,
+            "room_number": room.room_number,
+            "categories_id": str(categories_id),
+            "rent": rent_value,
+            "maintenance": maintenance_value,
+            "service": service_value,
+            "deposit": deposit_value,
+            "has_category_rent": rent_info is not None,
+            "message": "월세 정보를 성공적으로 조회했습니다"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] 고령자 월세 조회 중 오류: {str(e)}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"월세 조회 중 오류가 발생했습니다: {str(e)}")
 
 @router.get("/{elderly_id}")
 def get_elderly_detail(
@@ -448,6 +516,8 @@ def get_elderly_detail(
             "care_level": elderly.care_level,
             "status": elderly.status,
             "note": elderly.note,
+            "move_in_date": elderly.move_in_date,
+            "contract_date": elderly.contract_date,
             "hospitalization_status": hospitalization_status,
             "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
             "created_at": elderly.created_at,
@@ -513,10 +583,25 @@ def create_elderly(
         if isinstance(birth_date, str):
             birth_date = datetime.strptime(birth_date, "%Y-%m-%d").date()
         
+        # move_in_date가 문자열인 경우 date 객체로 변환 (Resident 테이블의 check_in_date로 사용)
+        move_in_date = elderly_data.move_in_date
+        if isinstance(move_in_date, str):
+            move_in_date = datetime.strptime(move_in_date, "%Y-%m-%d").date()
+        
+        # contract_date가 문자열인 경우 date 객체로 변환
+        contract_date = elderly_data.contract_date
+        if isinstance(contract_date, str):
+            contract_date = datetime.strptime(contract_date, "%Y-%m-%d").date()
+        
         # current_room_id가 문자열인 경우 UUID로 변환
         current_room_id = elderly_data.current_room_id
         if isinstance(current_room_id, str) and current_room_id:
             current_room_id = uuid.UUID(current_room_id)
+        
+        # categories_id가 문자열인 경우 UUID로 변환
+        categories_id = elderly_data.category_id
+        if isinstance(categories_id, str) and categories_id:
+            categories_id = uuid.UUID(categories_id)
         
         # 방이 지정된 경우 방 존재 여부 확인
         if current_room_id:
@@ -527,6 +612,12 @@ def create_elderly(
             # 방이 사용 가능한지 확인
             if not room.is_available:
                 raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
+        
+        # 카테고리가 지정된 경우 카테고리 존재 여부 확인
+        if categories_id:
+            category = db.query(ElderlyCategories).filter(ElderlyCategories.id == categories_id).first()
+            if not category:
+                raise HTTPException(status_code=404, detail="指定されたカテゴリが見つかりません")
         
         # 새로운 고령자 객체 생성
         new_elderly = Elderly(
@@ -540,12 +631,93 @@ def create_elderly(
             birth_date=birth_date,
             status=elderly_data.status or "ACTIVE",
             current_room_id=current_room_id,
-            care_level=elderly_data.care_level
+            care_level=elderly_data.care_level,
+            categories_id=categories_id,
+            contract_date=contract_date,
+            note=elderly_data.note
         )
         
         db.add(new_elderly)
         db.commit()
         db.refresh(new_elderly)
+        
+        # 방이 지정된 경우 Resident 테이블에 입주 기록 생성
+        if current_room_id and move_in_date:
+            try:
+                new_resident = Resident(
+                    id=uuid.uuid4(),
+                    room_id=current_room_id,
+                    resident_id=new_elderly.id,
+                    resident_type="elderly",
+                    check_in_date=move_in_date,
+                    is_active=True,
+                )
+                db.add(new_resident)
+                db.commit()
+                
+                # Resident 테이블 로그 생성
+                create_database_log(
+                    db=db,
+                    table_name="residents",
+                    record_id=str(new_resident.id),
+                    action="CREATE",
+                    user_id=current_user["id"] if current_user else None,
+                    new_values={
+                        "room_id": str(new_resident.room_id),
+                        "resident_id": str(new_resident.resident_id),
+                        "resident_type": new_resident.resident_type,
+                        "check_in_date": new_resident.check_in_date.strftime("%Y-%m-%d"),
+                        "is_active": new_resident.is_active,
+                        "note": new_resident.note
+                    },
+                    changed_fields=["room_id", "resident_id", "resident_type", "check_in_date", "is_active", "note"],
+                    note=f"고령자 입주 기록 생성 - {new_elderly.name}"
+                )
+            except Exception as resident_error:
+                print(f"Resident 기록 생성 중 오류: {str(resident_error)}")
+                # Resident 생성 실패해도 Elderly 생성은 계속 진행
+        
+        # 계약 정보가 있는 경우 ElderlyContract 테이블에 저장
+        if (elderly_data.rent is not None or elderly_data.maintenance is not None or 
+            elderly_data.service is not None or elderly_data.deposit is not None):
+            try:
+                new_contract = ElderlyContract(
+                    id=uuid.uuid4(),
+                    elderly_id=new_elderly.id,
+                    room_id=current_room_id,
+                    rent=elderly_data.rent or 0,
+                    maintenance=elderly_data.maintenance or 0,
+                    service=elderly_data.service or 0,
+                    deposit=elderly_data.deposit or 0,
+                    contract_start=contract_date,  # contract_date를 contract_start로 사용
+                    contract_end=None,  # 계약 종료일은 나중에 설정
+                )
+                db.add(new_contract)
+                db.commit()
+                
+                # ElderlyContract 테이블 로그 생성
+                create_database_log(
+                    db=db,
+                    table_name="elderly_contracts",
+                    record_id=str(new_contract.id),
+                    action="CREATE",
+                    user_id=current_user["id"] if current_user else None,
+                    new_values={
+                        "elderly_id": str(new_contract.elderly_id),
+                        "room_id": str(new_contract.room_id) if new_contract.room_id else None,
+                        "rent": new_contract.rent,
+                        "maintenance": new_contract.maintenance,
+                        "service": new_contract.service,
+                        "deposit": new_contract.deposit,
+                        "contract_start": new_contract.contract_start.strftime("%Y-%m-%d") if new_contract.contract_start else None,
+                        "is_active": new_contract.is_active
+                    },
+                    changed_fields=["elderly_id", "room_id", "rent", "maintenance", "service", "deposit", "contract_start", "is_active"],
+                    note=f"고령자 계약 정보 생성 - {new_elderly.name}"
+                )
+            except Exception as contract_error:
+                print(f"ElderlyContract 기록 생성 중 오류: {str(contract_error)}")
+                # Contract 생성 실패해도 Elderly 생성은 계속 진행
         
         # 데이터베이스 로그 생성
         try:
@@ -564,9 +736,11 @@ def create_elderly(
                     "birth_date": new_elderly.birth_date.strftime("%Y-%m-%d") if new_elderly.birth_date else None,
                     "status": new_elderly.status,
                     "current_room_id": str(new_elderly.current_room_id) if new_elderly.current_room_id else None,
-                    "care_level": new_elderly.care_level
+                    "care_level": new_elderly.care_level,
+                    "categories_id": str(new_elderly.categories_id) if new_elderly.categories_id else None,
+                    "contract_date": new_elderly.contract_date.strftime("%Y-%m-%d") if new_elderly.contract_date else None
                 },
-                changed_fields=["name", "email", "phone", "name_katakana", "gender", "birth_date", "status", "current_room_id", "care_level"],
+                changed_fields=["name", "email", "phone", "name_katakana", "gender", "birth_date", "status", "current_room_id", "care_level", "categories_id", "contract_date"],
                 note=f"新規高齢者登録 - {new_elderly.name}"
             )
         except Exception as log_error:
@@ -586,6 +760,9 @@ def create_elderly(
                 "status": new_elderly.status,
                 "current_room_id": str(new_elderly.current_room_id) if new_elderly.current_room_id else None,
                 "care_level": new_elderly.care_level,
+                "category_id": str(new_elderly.categories_id) if new_elderly.categories_id else None,
+                "move_in_date": new_resident.check_in_date.strftime("%Y-%m-%d") if new_resident.check_in_date else None,
+                "contract_date": new_elderly.contract_date.strftime("%Y-%m-%d") if new_elderly.contract_date else None,
                 "created_at": new_elderly.created_at.strftime("%Y-%m-%d %H:%M:%S") if new_elderly.created_at else None
             }
         }
@@ -619,6 +796,9 @@ def update_elderly(
             "status": elderly.status,
             "current_room_id": str(elderly.current_room_id) if elderly.current_room_id else None,
             "care_level": elderly.care_level,
+            "category_id": str(elderly.categories_id) if elderly.categories_id else None,
+            "move_in_date": elderly.move_in_date.strftime("%Y-%m-%d") if elderly.move_in_date else None,
+            "contract_date": elderly.contract_date.strftime("%Y-%m-%d") if elderly.contract_date else None,
             "note": elderly.note
         }
         
@@ -635,6 +815,12 @@ def update_elderly(
                         raise HTTPException(status_code=404, detail="指定された部屋が見つかりません")
                     if not room.is_available:
                         raise HTTPException(status_code=400, detail="該当の部屋は現在使用できません")
+                
+                # categories_id 검증
+                if field == "categories_id" and value:
+                    category = db.query(ElderlyCategories).filter(ElderlyCategories.id == value).first()
+                    if not category:
+                        raise HTTPException(status_code=404, detail="指定されたカテゴリが見つかりません")
                 
                 setattr(elderly, field, value)
                 changed_fields.append(field)
@@ -741,16 +927,73 @@ def get_elderly_meal_records_monthly_by_building(
                 # 해당 월의 입원 기록 조회
                 resident_hospitalizations = db.query(ElderlyHospitalization).filter(
                     ElderlyHospitalization.elderly_id == resident.id,
-                    ElderlyHospitalization.date >= start_date,
-                    ElderlyHospitalization.date <= end_date
-                ).order_by(ElderlyHospitalization.date.asc()).all()
+                    (ElderlyHospitalization.admission_date >= start_date) & 
+                    (ElderlyHospitalization.admission_date <= end_date)
+                ).union(
+                    db.query(ElderlyHospitalization).filter(
+                        ElderlyHospitalization.elderly_id == resident.id,
+                        (ElderlyHospitalization.discharge_date >= start_date) & 
+                        (ElderlyHospitalization.discharge_date <= end_date)
+                    )
+                ).order_by(ElderlyHospitalization.admission_date.asc()).all()
+                
+                # 거주자별 일별 데이터 구성 (1일~31일)
+                resident_daily_data = {}
+                for day in range(1, 32):
+                    current_date = date(year, month, day)
+                    if current_date.month == month:
+                        resident_daily_data[day] = {
+                            "day": day,
+                            "date": str(current_date),
+                            "breakfast": False,
+                            "lunch": False,
+                            "dinner": False,
+                            "total_skipped": 0
+                        }
+                
+                # 해당 거주자의 식사 기록을 일별 데이터에 반영
+                for record in meal_records:
+                    day = record.date.day
+                    if day in resident_daily_data:
+                        resident_daily_data[day][record.meal_type] = True
+                        resident_daily_data[day]["total_skipped"] += 1
+                
+                # 입원 기록을 거주자별 일별 데이터에 반영
+                for hospitalization in resident_hospitalizations:
+                    # 입원 기간 계산
+                    admission_date = hospitalization.admission_date
+                    discharge_date = hospitalization.discharge_date
+                    
+                    # 입원 시작일과 종료일을 해당 월 범위로 제한
+                    hospitalization_start = max(admission_date, start_date)
+                    # 퇴원일이 없으면 오늘 날짜를 사용, 있으면 해당 월의 마지막 날과 비교하여 더 작은 값 사용
+                    if discharge_date:
+                        hospitalization_end = min(discharge_date, end_date)
+                    else:
+                        hospitalization_end = min(datetime.now().date(), end_date)
+                    
+                    # 입원 중인 날짜들에 대해 식사 건너뛰기 처리
+                    current_date = hospitalization_start
+                    while current_date <= hospitalization_end:
+                        day = current_date.day
+                        if day in resident_daily_data:
+                            resident_daily_data[day]["breakfast"] = True
+                            resident_daily_data[day]["lunch"] = True
+                            resident_daily_data[day]["dinner"] = True
+                            resident_daily_data[day]["total_skipped"] = 3
+                        current_date += timedelta(days=1)
+                
+                # 일별 데이터를 배열로 변환
+                daily_records_array = []
+                for day, data in resident_daily_data.items():
+                    daily_records_array.append(data)
                 
                 # 거주자 데이터 구성
                 resident_data = {
                     "resident_id": str(resident.id),
                     "name": resident.name,
                     "room_number": room.room_number,
-                    "daily_records": [], # daily_records는 이제 포함하지 않음
+                    "daily_records": daily_records_array,
                     "hospitalizations": [
                         {
                             "elderly_id": str(h.elderly_id),
@@ -795,12 +1038,11 @@ def create_elderly_hospitalization(
         if hospitalization_data.hospitalization_type == "discharge":
             existing_hospitalization = db.query(ElderlyHospitalization).filter(
                 ElderlyHospitalization.elderly_id == hospitalization_data.elderly_id,
-                ElderlyHospitalization.hospitalization_type == "admission",
-                ElderlyHospitalization.meal_resume_date.is_(None)
-            ).order_by(ElderlyHospitalization.date.desc()).first()
+                ElderlyHospitalization.discharge_date.is_(None)
+            ).order_by(ElderlyHospitalization.admission_date.desc()).first()
             
             if existing_hospitalization:
-                existing_hospitalization.hospitalization_type = "discharge"
+                existing_hospitalization.discharge_date = hospitalization_data.discharge_date
                 existing_hospitalization.meal_resume_date = hospitalization_data.meal_resume_date
                 existing_hospitalization.meal_resume_type = hospitalization_data.meal_resume_type
                 existing_hospitalization.note = hospitalization_data.note
@@ -878,7 +1120,7 @@ def get_elderly_hospitalization_history(
         # 입원/퇴원 기록 조회
         query = db.query(ElderlyHospitalization).filter(
             ElderlyHospitalization.elderly_id == elderly_id
-        ).order_by(ElderlyHospitalization.date.desc())
+        ).order_by(ElderlyHospitalization.admission_date.desc())
         
         # 전체 항목 수 계산
         total_count = query.count()
@@ -1326,6 +1568,9 @@ def get_elderly_meal_records_monthly_by_building(
 
         # 해당 월의 식사 기록 조회 (해당 빌딩의 노인 거주자들만)
         resident_ids = [str(resident.id) for resident in elderly_residents]
+        print(f"[DEBUG] 조회할 거주자 ID들: {resident_ids}")
+        print(f"[DEBUG] 조회 기간: {start_date} ~ {end_date}")
+        
         records = db.query(ElderlyMealRecord).options(
             joinedload(ElderlyMealRecord.resident).joinedload(Resident.elderly)
         ).filter(
@@ -1333,6 +1578,10 @@ def get_elderly_meal_records_monthly_by_building(
             ElderlyMealRecord.skip_date <= end_date,
             ElderlyMealRecord.resident_id.in_(resident_ids)
         ).order_by(ElderlyMealRecord.skip_date, ElderlyMealRecord.meal_type).all()
+        
+        print(f"[DEBUG] 조회된 식사 기록 수: {len(records)}")
+        for record in records:
+            print(f"[DEBUG] 식사 기록 - 거주자ID: {record.resident_id}, 날짜: {record.skip_date}, 식사타입: {record.meal_type}")
 
         # 1일부터 31일까지의 모든 날짜에 대해 데이터 구성
         monthly_data = {}
@@ -1351,11 +1600,18 @@ def get_elderly_meal_records_monthly_by_building(
 
         # 해당 월의 입원 기록 조회 (해당 빌딩의 노인 거주자들만)
         elderly_ids = [str(resident.elderly.id) for resident in elderly_residents if resident.elderly]
+        print(f"[DEBUG] 고령자 ID 목록: {elderly_ids}")
         hospitalization_records = db.query(ElderlyHospitalization).filter(
-            ElderlyHospitalization.date >= start_date,
-            ElderlyHospitalization.date <= end_date,
+            (ElderlyHospitalization.admission_date >= start_date) & 
+            (ElderlyHospitalization.admission_date <= end_date),
             ElderlyHospitalization.elderly_id.in_(elderly_ids)
-        ).order_by(ElderlyHospitalization.date).all()
+        ).union(
+            db.query(ElderlyHospitalization).filter(
+                (ElderlyHospitalization.discharge_date >= start_date) & 
+                (ElderlyHospitalization.discharge_date <= end_date),
+                ElderlyHospitalization.elderly_id.in_(elderly_ids)
+            )
+        ).order_by(ElderlyHospitalization.admission_date).all()
 
         # 조회된 기록을 월별 데이터에 반영
         for record in records:
@@ -1365,7 +1621,40 @@ def get_elderly_meal_records_monthly_by_building(
                 monthly_data[day]["total_skipped"] += 1
                 monthly_data[day]["residents_skipped"].add(str(record.resident_id))
 
+        # 입원 기록을 월별 데이터에 반영
+        print(f"[DEBUG] 입원 기록 수: {len(hospitalization_records)}")
+        for hospitalization in hospitalization_records:
+            print(f"[DEBUG] 입원 기록 - 고령자ID: {hospitalization.elderly_id}, 입원일: {hospitalization.admission_date}, 퇴원일: {hospitalization.discharge_date}")
+            
+            # 입원 기간 계산
+            admission_date = hospitalization.admission_date
+            discharge_date = hospitalization.discharge_date
+            
+            # 해당 월의 입원 기간 계산
+            hospitalization_start = max(admission_date, start_date)
+            # 퇴원일이 없으면 오늘 날짜를 사용, 있으면 해당 월의 마지막 날과 비교하여 더 작은 값 사용
+            if discharge_date:
+                hospitalization_end = min(discharge_date, end_date)
+            else:
+                hospitalization_end = min(datetime.now().date(), end_date)
+            
+            print(f"[DEBUG] 처리할 입원 기간: {hospitalization_start} ~ {hospitalization_end}")
+            
+            # 입원 중인 날짜들에 대해 식사 건너뛰기 처리
+            current_date = hospitalization_start
+            while current_date <= hospitalization_end:
+                day = current_date.day
+                if day in monthly_data:
+                    monthly_data[day]["breakfast"] += 1
+                    monthly_data[day]["lunch"] += 1
+                    monthly_data[day]["dinner"] += 1
+                    monthly_data[day]["total_skipped"] += 3
+                    monthly_data[day]["residents_skipped"].add(str(hospitalization.elderly_id))
+                    print(f"[DEBUG] {current_date} (day {day}) - 식사 건너뛰기 추가")
+                current_date += timedelta(days=1)
+
         # 응답 데이터 준비
+        print(f"[DEBUG] monthly_data 최종 상태: {monthly_data}")
         daily_records = []
         for day, data in monthly_data.items():
             daily_record = {
@@ -1383,6 +1672,7 @@ def get_elderly_meal_records_monthly_by_building(
         residents_data = []
         for resident in elderly_residents:
             resident_records = [r for r in records if str(r.resident_id) == str(resident.id)]
+            print(f"[DEBUG] 거주자 {resident.id} ({resident.elderly.name if resident.elderly else 'Unknown'})의 기록 수: {len(resident_records)}")
             
             # 거주자별 일별 데이터 구성 (1일~31일)
             resident_daily_data = {}
@@ -1404,6 +1694,33 @@ def get_elderly_meal_records_monthly_by_building(
                 if day in resident_daily_data:
                     resident_daily_data[day][record.meal_type] = True
                     resident_daily_data[day]["total_skipped"] += 1
+            
+            # 입원 기록을 거주자별 일별 데이터에 반영
+            if resident.elderly:
+                resident_hospitalizations = [h for h in hospitalization_records if str(h.elderly_id) == str(resident.elderly.id)]
+                for hospitalization in resident_hospitalizations:
+                    # 입원 기간 계산
+                    admission_date = hospitalization.admission_date
+                    discharge_date = hospitalization.discharge_date
+                    
+                    # 입원 시작일과 종료일을 해당 월 범위로 제한
+                    hospitalization_start = max(admission_date, start_date)
+                    # 퇴원일이 없으면 오늘 날짜를 사용, 있으면 해당 월의 마지막 날과 비교하여 더 작은 값 사용
+                    if discharge_date:
+                        hospitalization_end = min(discharge_date, end_date)
+                    else:
+                        hospitalization_end = min(datetime.now().date(), end_date)
+                    
+                    # 입원 중인 날짜들에 대해 식사 건너뛰기 처리
+                    current_date = hospitalization_start
+                    while current_date <= hospitalization_end:
+                        day = current_date.day
+                        if day in resident_daily_data:
+                            resident_daily_data[day]["breakfast"] = True
+                            resident_daily_data[day]["lunch"] = True
+                            resident_daily_data[day]["dinner"] = True
+                            resident_daily_data[day]["total_skipped"] = 3
+                        current_date += timedelta(days=1)
             
             # 일별 데이터를 배열로 변환
             daily_records_array = []
@@ -2241,3 +2558,4 @@ def get_building_elderly_statistics(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"建物統計の取得中にエラーが発生しました: {str(e)}")
+

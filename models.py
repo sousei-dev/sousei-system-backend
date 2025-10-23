@@ -207,7 +207,7 @@ class Room(Base):
     floor = Column(Integer)
     capacity = Column(Integer)
     is_available = Column(Boolean, default=True)
-    security_deposit = Column(Integer)
+    deposit = Column(Integer)
     note = Column(String)
 
     # 관계 설정
@@ -392,6 +392,7 @@ class Elderly(Base):
     care_level = Column(String)
     categories_id = Column(UUID(as_uuid=True), ForeignKey("elderly_categories.id"), nullable=True)
     note = Column(String)
+    contract_date = Column(Date)
 
     # 관계 설정
     current_room = relationship("Room", foreign_keys=[current_room_id])

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
-from models import User
+from models import User, DatabaseLog
 from schemas import UserCreate, UserLogin, ChangePasswordRequest, AdminResetPasswordRequest
 from datetime import timedelta
 import os
@@ -18,6 +18,13 @@ router = APIRouter(prefix="/auth", tags=["인증"])
 # .env 파일에서 Supabase 설정 로드
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+# Supabase 설정 확인
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    logger.error(f"Supabase 설정 오류 - URL: {SUPABASE_URL}, KEY: {'설정됨' if SUPABASE_ANON_KEY else '설정되지 않음'}")
+    raise Exception("Supabase 설정이 올바르지 않습니다.")
+
+logger.info(f"Supabase 설정 확인 - URL: {SUPABASE_URL}")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
@@ -37,15 +44,49 @@ def get_db():
 @router.post("/login")
 async def login(user: UserLogin):
     try:
+        logger.info(f"로그인 시도 - 이메일: {user.email}")
+        
         # Supabase Auth를 사용한 로그인
         auth_response = supabase.auth.sign_in_with_password({
             "email": user.email,
             "password": user.password
         })
         
+        logger.info(f"Supabase 인증 성공 - 사용자 ID: {auth_response.user.id if auth_response.user else 'None'}")
+        
         # 로그인 성공 시 사용자 정보 반환
         user_data = auth_response.user
         session = auth_response.session
+        
+        # 데이터베이스 로그 조회
+        db = SessionLocal()
+        try:
+            # 모든 데이터베이스 로그 조회 (최신 100개)
+            database_logs = db.query(DatabaseLog).order_by(DatabaseLog.created_at.desc()).limit(100).all()
+            
+            # 로그 데이터 포맷팅
+            logs_data = []
+            for log in database_logs:
+                log_data = {
+                    "id": str(log.id),
+                    "table_name": log.table_name,
+                    "record_id": log.record_id,
+                    "action": log.action,
+                    "user_id": log.user_id,
+                    "old_values": log.old_values,
+                    "new_values": log.new_values,
+                    "changed_fields": log.changed_fields,
+                    "ip_address": log.ip_address,
+                    "user_agent": log.user_agent,
+                    "note": log.note,
+                    "created_at": log.created_at.isoformat() if log.created_at else None
+                }
+                logs_data.append(log_data)
+        except Exception as log_error:
+            logger.error(f"데이터베이스 로그 조회 중 오류: {str(log_error)}")
+            logs_data = []
+        finally:
+            db.close()
         
         # 사용자 권한 정보 조회
         try:
@@ -63,7 +104,9 @@ async def login(user: UserLogin):
                 "role": profile_data.get("role", "manager"),
                 "access_token": session.access_token,
                 "refresh_token": session.refresh_token,
-                "token_type": "bearer"
+                "token_type": "bearer",
+                "database_logs": logs_data,
+                "total_logs": len(logs_data)
             }
         except Exception as profile_error:
             # 프로필 조회 실패 시 기본 정보만 반환
@@ -77,24 +120,30 @@ async def login(user: UserLogin):
                 "role": "manager",
                 "access_token": session.access_token,
                 "refresh_token": session.refresh_token,
-                "token_type": "bearer"
+                "token_type": "bearer",
+                "database_logs": logs_data,
+                "total_logs": len(logs_data)
             }
         
     except Exception as e:
         # Supabase Auth 에러 처리
         error_message = str(e)
+        logger.error(f"로그인 실패 - 이메일: {user.email}, 오류: {error_message}")
         
         if "Invalid login credentials" in error_message:
+            logger.warning(f"잘못된 로그인 자격증명 - 이메일: {user.email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="이메일 또는 비밀번호가 올바르지 않습니다."
             )
         elif "Email not confirmed" in error_message:
+            logger.warning(f"이메일 미인증 - 이메일: {user.email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="이메일 인증이 필요합니다. 해결 방법: 1) Supabase 대시보드 → Authentication → Settings → 'Enable email confirmations' 체크 해제, 2) 또는 Authentication → Users에서 해당 사용자의 'Email confirmed'를 true로 변경"
             )
         else:
+            logger.error(f"알 수 없는 로그인 오류 - 이메일: {user.email}, 오류: {error_message}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"로그인 중 오류가 발생했습니다: {error_message}"

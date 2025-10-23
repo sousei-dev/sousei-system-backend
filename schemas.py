@@ -674,16 +674,23 @@ class ElderlyCreate(BaseModel):
     status: Optional[str] = Field("ACTIVE", example="ACTIVE")
     current_room_id: Optional[Union[UUID, str]] = Field(None, example="room-uuid")
     care_level: Optional[str] = Field(None, example="要介護1")
+    category_id: Optional[Union[UUID, str]] = Field(None, example="category-uuid")
+    move_in_date: Optional[Union[date, str]] = Field(None, example="2024-01-01")
+    contract_date: Optional[Union[date, str]] = Field(None, example="2024-01-01")
+    rent: Optional[int] = Field(None, example=500000)
+    maintenance: Optional[int] = Field(None, example=50000)
+    service: Optional[int] = Field(None, example=50000)
+    deposit: Optional[int] = Field(None, example=100000)
     note: Optional[str] = Field(None, example="備考")
 
-    @field_validator('current_room_id', mode='before')
+    @field_validator('current_room_id', 'category_id', mode='before')
     @classmethod
     def validate_uuid_fields(cls, v):
         if v == "" or v is None:
             return None
         return v
 
-    @field_validator('birth_date', mode='before')
+    @field_validator('birth_date', 'move_in_date', 'contract_date', mode='before')
     @classmethod
     def validate_date_fields(cls, v):
         if v == "" or v is None:
@@ -708,6 +715,9 @@ class ElderlyUpdate(BaseModel):
     status: Optional[str] = None
     current_room_id: Optional[UUID] = None
     care_level: Optional[str] = None
+    categories_id: Optional[UUID] = None
+    move_in_date: Optional[date] = None
+    contract_date: Optional[date] = None
     note: Optional[str] = None
 
 class ElderlyResponse(BaseModel):

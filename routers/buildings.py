@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List
 from database import SessionLocal
-from models import Building, Room, Student, Resident, BillingMonthlyItem, RoomUtility, BuildingCategoriesRent, Company, UserBuildingPermission
+from models import Building, Room, Student, Resident, BillingMonthlyItem, RoomUtility, BuildingCategoriesRent, Company, UserBuildingPermission, Elderly
 from schemas import BuildingResponse, BuildingUpdate, BuildingCreate
 from datetime import datetime, date, timedelta
 from database_log import create_database_log
@@ -328,7 +328,7 @@ def get_rooms_by_building(
           "capacity": room.capacity,
           "is_available": room.is_available,
           "note": room.note,
-          "security_deposit": room.security_deposit,
+          "deposit": room.deposit,
           "monthly_rent": None
         }
         

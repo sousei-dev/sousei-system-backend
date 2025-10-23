@@ -2301,6 +2301,38 @@ async def add_conversation_member(
             role=member_data.role
         )
         db.add(new_member)
+        
+        # 새 멤버가 그룹방의 모든 기존 메시지를 읽은 것으로 처리
+        try:
+            # 해당 대화방의 모든 메시지 조회 (삭제되지 않은 메시지만)
+            existing_messages = db.query(Message).filter(
+                Message.conversation_id == conversation_id,
+                Message.deleted_at.is_(None),
+                Message.sender_id != member_data.user_id  # 본인이 보낸 메시지는 제외
+            ).all()
+            
+            # 각 메시지에 대해 읽음 처리
+            for message in existing_messages:
+                # 이미 읽음 처리된 메시지인지 확인
+                existing_read = db.query(MessageRead).filter(
+                    MessageRead.message_id == message.id,
+                    MessageRead.user_id == member_data.user_id
+                ).first()
+                
+                if not existing_read:
+                    # 읽음 처리 추가
+                    message_read = MessageRead(
+                        message_id=message.id,
+                        user_id=member_data.user_id,
+                        read_at=datetime.utcnow()
+                    )
+                    db.add(message_read)
+            
+            logger.info(f"새 멤버 {member_data.user_id}가 대화방 {conversation_id}의 {len(existing_messages)}개 메시지를 읽음 처리했습니다")
+            
+        except Exception as read_error:
+            logger.error(f"메시지 읽음 처리 중 오류: {read_error}")
+        
         db.commit()
         
         # WebSocket을 통해 새 멤버 추가 알림
@@ -2507,6 +2539,42 @@ async def invite_members_to_conversation(
                 logger.error(f"멤버 {user_id} 추가 실패: {member_error}")
                 failed_members.append(user_id)
         
+        # 새로 추가된 멤버들이 그룹방의 모든 기존 메시지를 읽은 것으로 처리
+        try:
+            if added_members:
+                # 해당 대화방의 모든 메시지 조회 (삭제되지 않은 메시지만)
+                existing_messages = db.query(Message).filter(
+                    Message.conversation_id == conversation_id,
+                    Message.deleted_at.is_(None)
+                ).all()
+                
+                # 각 추가된 멤버에 대해 읽음 처리
+                for user_id in added_members:
+                    for message in existing_messages:
+                        # 본인이 보낸 메시지는 제외
+                        if str(message.sender_id) == user_id:
+                            continue
+                            
+                        # 이미 읽음 처리된 메시지인지 확인
+                        existing_read = db.query(MessageRead).filter(
+                            MessageRead.message_id == message.id,
+                            MessageRead.user_id == user_id
+                        ).first()
+                        
+                        if not existing_read:
+                            # 읽음 처리 추가
+                            message_read = MessageRead(
+                                message_id=message.id,
+                                user_id=user_id,
+                                read_at=datetime.utcnow()
+                            )
+                            db.add(message_read)
+                
+                logger.info(f"새로 추가된 {len(added_members)}명의 멤버가 대화방 {conversation_id}의 {len(existing_messages)}개 메시지를 읽음 처리했습니다")
+                
+        except Exception as read_error:
+            logger.error(f"메시지 읽음 처리 중 오류: {read_error}")
+        
         db.commit()
         
         # WebSocket을 통해 멤버 추가 알림
@@ -2622,9 +2690,9 @@ async def get_all_users(
                 detail="Supabaseクライアントが初期化されていません"
             )
         
-        # Supabase에서 사용자 정보 조회 (본인 제외)
+        # Supabase에서 사용자 정보 조회 (본인 제외, department가 있는 사용자만)
         # auth.users는 직접 접근할 수 없으므로 profiles 테이블에서 조회
-        query = supabase.table('profiles').select('*').neq('id', current_user["id"])
+        query = supabase.table('profiles').select('*').neq('id', current_user["id"]).not_.is_('department', 'null').neq('department', '')
         
         # 검색 필터링 (이름으로 검색)
         if search:
